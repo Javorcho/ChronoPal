@@ -2,6 +2,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
 
+import { AuthScreen } from '@/screens/AuthScreen';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useScheduleStore } from '@/store/useScheduleStore';
 
@@ -29,27 +30,36 @@ export default function App() {
   }, [initAuth]);
 
   useEffect(() => {
-    if (!authLoading) {
-      initSchedule(user?.uid);
+    if (!authLoading && user) {
+      initSchedule(user.uid);
     }
-  }, [authLoading, user?.uid, initSchedule]);
+  }, [authLoading, user, initSchedule]);
 
+  // Show auth screen if not authenticated
+  if (!user && !authLoading) {
+    return (
+      <>
+        <AuthScreen />
+        <StatusBar style="light" />
+      </>
+    );
+  }
+
+  // Show main app content when authenticated
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.card}>
-        <Text style={styles.title}>ChronoPal Foundation</Text>
+        <Text style={styles.title}>ChronoPal</Text>
         <Text style={styles.subtitle}>
-          {scheduleLoading ? 'Syncing weekly plan…' : 'Data layer ready'}
+          {scheduleLoading ? 'Syncing weekly plan…' : 'Welcome back!'}
         </Text>
         <View style={styles.metaRow}>
           <Text style={styles.metaLabel}>Activities:</Text>
           <Text style={styles.metaValue}>{activities.length}</Text>
         </View>
         <View style={styles.metaRow}>
-          <Text style={styles.metaLabel}>Mode:</Text>
-          <Text style={styles.metaValue}>
-            {user ? user.email ?? user.uid : 'Demo data'}
-          </Text>
+          <Text style={styles.metaLabel}>User:</Text>
+          <Text style={styles.metaValue}>{user?.email ?? user?.uid}</Text>
         </View>
       </View>
       <StatusBar style="dark" />
