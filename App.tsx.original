@@ -1,0 +1,214 @@
+import React from 'react';
+import { StatusBar } from 'expo-status-bar';
+import { useEffect, ErrorInfo, ReactNode } from 'react';
+import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
+
+import { AuthScreen } from '@/screens/AuthScreen';
+import { useAuthStore } from '@/store/useAuthStore';
+import { useScheduleStore } from '@/store/useScheduleStore';
+
+class ErrorBoundary extends React.Component<
+  { children: ReactNode },
+  { hasError: boolean; error?: Error }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('App Error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <SafeAreaView style={styles.container}>
+          <View style={styles.card}>
+            <Text style={styles.title}>Error</Text>
+            <Text style={styles.subtitle}>{this.state.error?.message}</Text>
+            <Text style={styles.errorText}>
+              Check the browser console for details
+            </Text>
+          </View>
+        </SafeAreaView>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+function AppContent() {
+  console.log('[App] Rendering AppContent...');
+  
+  let user, authLoading, initAuth, activities, scheduleLoading, initSchedule;
+  
+  try {
+    const authState = useAuthStore((state) => ({
+      user: state.user,
+      initializing: state.initializing,
+      initialize: state.initialize,
+    }));
+    user = authState.user;
+    authLoading = authState.initializing;
+    initAuth = authState.initialize;
+  } catch (error) {
+    console.error('[App] Error accessing auth store:', error);
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.card}>
+          <Text style={styles.title}>Error</Text>
+          <Text style={styles.subtitle}>Failed to load auth store</Text>
+          <Text style={styles.errorText}>{(error as Error).message}</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  try {
+    const scheduleState = useScheduleStore((state) => ({
+      activities: state.activities,
+      loading: state.loading,
+      initialize: state.initialize,
+    }));
+    activities = scheduleState.activities;
+    scheduleLoading = scheduleState.loading;
+    initSchedule = scheduleState.initialize;
+  } catch (error) {
+    console.error('[App] Error accessing schedule store:', error);
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.card}>
+          <Text style={styles.title}>Error</Text>
+          <Text style={styles.subtitle}>Failed to load schedule store</Text>
+          <Text style={styles.errorText}>{(error as Error).message}</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  useEffect(() => {
+    console.log('[App] Initializing auth...');
+    try {
+      initAuth();
+    } catch (error) {
+      console.error('[App] Auth initialization error:', error);
+    }
+  }, [initAuth]);
+
+  useEffect(() => {
+    if (!authLoading && user) {
+      try {
+        initSchedule(user.uid);
+      } catch (error) {
+        console.error('Schedule initialization error:', error);
+      }
+    }
+  }, [authLoading, user, initSchedule]);
+
+  // Show loading state
+  if (authLoading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.card}>
+          <Text style={styles.title}>ChronoPal</Text>
+          <Text style={styles.subtitle}>Loading...</Text>
+        </View>
+        <StatusBar style="dark" />
+      </SafeAreaView>
+    );
+  }
+
+  // Show auth screen if not authenticated
+  if (!user) {
+    return (
+      <>
+        <AuthScreen />
+        <StatusBar style="light" />
+      </>
+    );
+  }
+
+  // Show main app content when authenticated
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.card}>
+        <Text style={styles.title}>ChronoPal</Text>
+        <Text style={styles.subtitle}>
+          {scheduleLoading ? 'Syncing weekly plan…' : 'Welcome back!'}
+        </Text>
+        <View style={styles.metaRow}>
+          <Text style={styles.metaLabel}>Activities:</Text>
+          <Text style={styles.metaValue}>{activities.length}</Text>
+        </View>
+        <View style={styles.metaRow}>
+          <Text style={styles.metaLabel}>User:</Text>
+          <Text style={styles.metaValue}>{user?.email ?? user?.uid}</Text>
+        </View>
+      </View>
+      <StatusBar style="dark" />
+    </SafeAreaView>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#0f172a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  card: {
+    width: '100%',
+    borderRadius: 20,
+    padding: 24,
+    backgroundColor: '#ffffff',
+    gap: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#475569',
+  },
+  metaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  metaLabel: {
+    fontSize: 14,
+    color: '#64748b',
+  },
+  metaValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  errorText: {
+    fontSize: 12,
+    color: '#dc2626',
+    marginTop: 8,
+  },
+});

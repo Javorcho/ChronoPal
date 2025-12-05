@@ -35,8 +35,19 @@ export default function App() {
     }
   }, [authLoading, user, initSchedule]);
 
-  // Show auth screen if not authenticated
-  if (!user && !authLoading) {
+  if (authLoading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.card}>
+          <Text style={styles.title}>ChronoPal</Text>
+          <Text style={styles.subtitle}>Loading...</Text>
+        </View>
+        <StatusBar style="dark" />
+      </SafeAreaView>
+    );
+  }
+
+  if (!user) {
     return (
       <>
         <AuthScreen />
@@ -45,7 +56,6 @@ export default function App() {
     );
   }
 
-  // Show main app content when authenticated
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.card}>

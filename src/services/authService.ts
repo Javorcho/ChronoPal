@@ -1,62 +1,80 @@
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  User,
-} from 'firebase/auth';
-
-import { getFirebaseAuth } from '@/lib/firebase';
-import { isFirebaseConfigured } from '@/config/env';
+import { isSupabaseConfigured } from '@/config/env';
+import { getSupabaseClient } from '@/lib/supabase';
 
 export type AuthCredentials = {
   email: string;
   password: string;
 };
 
-export type AuthUser = Pick<User, 'uid' | 'email'>;
+export type AuthUser = {
+  uid: string;
+  email?: string;
+};
 
-const toAuthUser = (user: User | null): AuthUser | undefined =>
+const toAuthUser = (user: any): AuthUser | undefined =>
   user ? { uid: user.uid, email: user.email ?? undefined } : undefined;
 
 export const subscribeToAuthChanges = (
   callback: (user?: AuthUser) => void,
 ): (() => void) => {
-  if (!isFirebaseConfigured) {
+  if (!isSupabaseConfigured) {
     callback({ uid: 'demo-user', email: 'demo@chronopal.dev' });
     return () => undefined;
   }
 
-  const auth = getFirebaseAuth();
-  return onAuthStateChanged(auth, (user) => callback(toAuthUser(user)));
+  const supabase = getSupabaseClient();
+  const { data } = supabase.auth.onAuthStateChange((event, session) => {
+    const user = session?.user
+      ? { uid: session.user.id, email: session.user.email ?? undefined }
+      : undefined;
+    callback(user);
+  });
+
+  return data.subscription.unsubscribe;
 };
 
 export const signUpWithEmail = async ({ email, password }: AuthCredentials) => {
-  if (!isFirebaseConfigured) {
+  if (!isSupabaseConfigured) {
     return { uid: 'demo-user', email };
   }
 
-  const auth = getFirebaseAuth();
-  const result = await createUserWithEmailAndPassword(auth, email, password);
-  return toAuthUser(result.user);
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  return data.user ? { uid: data.user.id, email: data.user.email ?? undefined } : undefined;
 };
 
 export const signInWithEmail = async ({ email, password }: AuthCredentials) => {
-  if (!isFirebaseConfigured) {
+  if (!isSupabaseConfigured) {
     return { uid: 'demo-user', email };
   }
 
-  const auth = getFirebaseAuth();
-  const result = await signInWithEmailAndPassword(auth, email, password);
-  return toAuthUser(result.user);
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  return data.user ? { uid: data.user.id, email: data.user.email ?? undefined } : undefined;
 };
 
 export const signOutUser = async () => {
-  if (!isFirebaseConfigured) {
+  if (!isSupabaseConfigured) {
     return;
   }
 
-  const auth = getFirebaseAuth();
-  await signOut(auth);
+  const supabase = getSupabaseClient();
+  await supabase.auth.signOut();
 };
 

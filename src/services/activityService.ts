@@ -1,25 +1,12 @@
 import {
-  addDoc,
-  collection,
-  deleteDoc,
-  doc,
-  getDocs,
-  onSnapshot,
-  orderBy,
-  query,
-  updateDoc,
-  where,
-} from 'firebase/firestore';
-
-import { getFirestoreDb } from '@/lib/firebase';
-import {
   Activity,
   ActivityId,
   ActivityInput,
   ActivityUpdate,
 } from '@/types/schedule';
-import { isFirebaseConfigured } from '@/config/env';
+import { isSupabaseConfigured } from '@/config/env';
 import { getMockActivities } from '@/utils/mockActivities';
+import { getSupabaseClient } from '@/lib/supabase';
 
 const COLLECTION = 'activities';
 
@@ -27,61 +14,77 @@ export const subscribeToActivities = (
   userId: string,
   callback: (activities: Activity[]) => void,
 ) => {
-  if (!isFirebaseConfigured) {
+  if (!isSupabaseConfigured) {
     callback(getMockActivities(userId));
     return () => undefined;
   }
 
-  const db = getFirestoreDb();
-  const activitiesRef = collection(db, COLLECTION);
+  const supabase = getSupabaseClient();
 
-  const q = query(
-    activitiesRef,
-    where('userId', '==', userId),
-    orderBy('startTime', 'asc'),
-  );
+  const channel = supabase
+    .channel(`public:${COLLECTION}:${userId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: COLLECTION,
+        filter: `user_id=eq.${userId}`,
+      },
+      async () => {
+        const latest = await fetchActivities(userId);
+        callback(latest);
+      },
+    )
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        fetchActivities(userId).then(callback).catch(() => {
+          callback(getMockActivities(userId));
+        });
+      }
+    });
 
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const data = snapshot.docs.map((docSnapshot) => ({
-        id: docSnapshot.id,
-        ...(docSnapshot.data() as Activity),
-      }));
-      callback(data);
-    },
-    (error) => {
-      console.warn('[activityService] subscription error', error);
-    },
-  );
+  return () => {
+    supabase.removeChannel(channel);
+  };
 };
 
 export const fetchActivities = async (userId: string): Promise<Activity[]> => {
-  if (!isFirebaseConfigured) {
+  if (!isSupabaseConfigured) {
     return getMockActivities(userId);
   }
 
-  const db = getFirestoreDb();
-  const activitiesRef = collection(db, COLLECTION);
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from(COLLECTION)
+    .select('*')
+    .eq('user_id', userId)
+    .order('start_time', { ascending: true });
 
-  const q = query(
-    activitiesRef,
-    where('userId', '==', userId),
-    orderBy('startTime', 'asc'),
-  );
+  if (error) {
+    throw error;
+  }
 
-  const snapshot = await getDocs(q);
-
-  return snapshot.docs.map((docSnapshot) => ({
-    id: docSnapshot.id,
-    ...(docSnapshot.data() as Activity),
+  return (data ?? []).map((row: any) => ({
+    id: row.id,
+    userId: row.user_id,
+    name: row.name,
+    color: row.color,
+    day: row.day,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    isRecurring: row.is_recurring,
+    recurrence: row.recurrence,
+    notes: row.notes,
+    createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+    updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : Date.now(),
   }));
 };
 
 export const createActivity = async (
   input: ActivityInput,
 ): Promise<Activity> => {
-  if (!isFirebaseConfigured) {
+  if (!isSupabaseConfigured) {
     const fallbackActivity: Activity = {
       id: `mock-${Date.now()}`,
       createdAt: Date.now(),
@@ -91,40 +94,77 @@ export const createActivity = async (
     return fallbackActivity;
   }
 
-  const db = getFirestoreDb();
-  const activitiesRef = collection(db, COLLECTION);
+  const supabase = getSupabaseClient();
   const payload = {
-    ...input,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
+    user_id: input.userId,
+    name: input.name,
+    color: input.color,
+    day: input.day,
+    start_time: input.startTime,
+    end_time: input.endTime,
+    is_recurring: input.isRecurring,
+    recurrence: input.recurrence,
+    notes: input.notes,
   };
-  const docRef = await addDoc(activitiesRef, payload);
-  return { id: docRef.id, ...payload };
+
+  const { data, error } = await supabase.from(COLLECTION).insert(payload).select().single();
+  if (error) {
+    throw error;
+  }
+
+  return {
+    id: data.id,
+    userId: data.user_id,
+    name: data.name,
+    color: data.color,
+    day: data.day,
+    startTime: data.start_time,
+    endTime: data.end_time,
+    isRecurring: data.is_recurring,
+    recurrence: data.recurrence,
+    notes: data.notes,
+    createdAt: data.created_at ? new Date(data.created_at).getTime() : Date.now(),
+    updatedAt: data.updated_at ? new Date(data.updated_at).getTime() : Date.now(),
+  };
 };
 
 export const updateActivity = async (
   id: ActivityId,
   updates: ActivityUpdate,
 ) => {
-  if (!isFirebaseConfigured) {
+  if (!isSupabaseConfigured) {
     return;
   }
 
-  const db = getFirestoreDb();
-  const activityRef = doc(db, COLLECTION, id);
-  await updateDoc(activityRef, {
+  const supabase = getSupabaseClient();
+  const payload: Record<string, any> = {
     ...updates,
-    updatedAt: Date.now(),
-  });
+    updated_at: new Date().toISOString(),
+  };
+
+  if (updates.startTime) payload.start_time = updates.startTime;
+  if (updates.endTime) payload.end_time = updates.endTime;
+  if (updates.isRecurring !== undefined) payload.is_recurring = updates.isRecurring;
+
+  delete payload.startTime;
+  delete payload.endTime;
+  delete payload.isRecurring;
+
+  const { error } = await supabase.from(COLLECTION).update(payload).eq('id', id);
+  if (error) {
+    throw error;
+  }
 };
 
 export const removeActivity = async (id: ActivityId) => {
-  if (!isFirebaseConfigured) {
+  if (!isSupabaseConfigured) {
     return;
   }
 
-  const db = getFirestoreDb();
-  const activityRef = doc(db, COLLECTION, id);
-  await deleteDoc(activityRef);
+  const supabase = getSupabaseClient();
+  const { error } = await supabase.from(COLLECTION).delete().eq('id', id);
+  if (error) {
+    throw error;
+  }
 };
 
