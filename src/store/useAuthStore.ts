@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { devtools } from 'zustand/middleware';
 
 import {
   AuthCredentials,
@@ -22,8 +21,7 @@ type AuthState = {
 
 let unsubscribe: (() => void) | undefined;
 
-export const useAuthStore = create<AuthState>()(
-  devtools((set) => ({
+export const useAuthStore = create<AuthState>()((set) => ({
     user: undefined,
     initializing: true,
     error: undefined,
@@ -64,8 +62,7 @@ export const useAuthStore = create<AuthState>()(
         set({ error: (error as Error).message });
       }
     },
-  })),
-);
+  }));
 
 export const resetAuthStore = () => {
   unsubscribe?.();

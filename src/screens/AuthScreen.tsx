@@ -14,16 +14,16 @@ import {
 import { useAuthStore } from '@/store/useAuthStore';
 
 export const AuthScreen = () => {
-  const { user, initializing, error, signIn, signUp, initialize } = useAuthStore();
+  // Select individual properties to avoid infinite loop
+  const initializing = useAuthStore((state) => state.initializing);
+  const error = useAuthStore((state) => state.error);
+  const signIn = useAuthStore((state) => state.signIn);
+  const signUp = useAuthStore((state) => state.signUp);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    initialize();
-  }, [initialize]);
 
   const handleSubmit = async () => {
     if (!email.trim() || !password.trim()) {

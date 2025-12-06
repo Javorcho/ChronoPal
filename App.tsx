@@ -7,23 +7,14 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { useScheduleStore } from '@/store/useScheduleStore';
 
 export default function App() {
-  const { user, initializing: authLoading, initialize: initAuth } = useAuthStore(
-    (state) => ({
-      user: state.user,
-      initializing: state.initializing,
-      initialize: state.initialize,
-    }),
-  );
+  // Select individual properties to avoid infinite loop
+  const user = useAuthStore((state) => state.user);
+  const authLoading = useAuthStore((state) => state.initializing);
+  const initAuth = useAuthStore((state) => state.initialize);
 
-  const {
-    activities,
-    loading: scheduleLoading,
-    initialize: initSchedule,
-  } = useScheduleStore((state) => ({
-    activities: state.activities,
-    loading: state.loading,
-    initialize: state.initialize,
-  }));
+  const activities = useScheduleStore((state) => state.activities);
+  const scheduleLoading = useScheduleStore((state) => state.loading);
+  const initSchedule = useScheduleStore((state) => state.initialize);
 
   useEffect(() => {
     initAuth();

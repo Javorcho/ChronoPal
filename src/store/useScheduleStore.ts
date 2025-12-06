@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { devtools } from 'zustand/middleware';
 
 import {
   createActivity,
@@ -38,8 +37,7 @@ const fallbackUserId = 'demo-user';
 
 let unsubscribe: (() => void) | undefined;
 
-export const useScheduleStore = create<ScheduleState>()(
-  devtools((set, get) => ({
+export const useScheduleStore = create<ScheduleState>()((set, get) => ({
     userId: undefined,
     activities: getMockActivities(fallbackUserId),
     selectedDay: DayOfWeek.Monday,
@@ -148,8 +146,7 @@ export const useScheduleStore = create<ScheduleState>()(
         userId: undefined,
       });
     },
-  })),
-);
+  }));
 
 export const useDayActivities = (day: DayOfWeek) =>
   useScheduleStore((state) =>
