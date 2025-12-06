@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,6 +13,7 @@ import {
 } from 'react-native';
 
 import { useAuthStore } from '@/store/useAuthStore';
+import { useTheme } from '@/store/useThemeStore';
 
 export const AuthScreen = () => {
   // Select individual properties to avoid infinite loop
@@ -20,14 +22,32 @@ export const AuthScreen = () => {
   const signIn = useAuthStore((state) => state.signIn);
   const signUp = useAuthStore((state) => state.signUp);
 
+  const { colors } = useTheme();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+  const [isHovered, setIsHovered] = useState(false);
 
   const handleSubmit = async () => {
     if (!email.trim() || !password.trim()) {
       return;
+    }
+
+    // Validate password confirmation for signup
+    if (isSignUp) {
+      if (password !== confirmPassword) {
+        setPasswordError('Passwords do not match');
+        return;
+      }
+      if (password.length < 6) {
+        setPasswordError('Password must be at least 6 characters');
+        return;
+      }
+      setPasswordError('');
     }
 
     setLoading(true);
@@ -44,35 +64,42 @@ export const AuthScreen = () => {
 
   if (initializing) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#7f78d2" />
-        <Text style={styles.loadingText}>Loading...</Text>
+      <View style={[styles.loadingContainer, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={[styles.loadingText, { color: colors.textPrimary }]}>Loading...</Text>
       </View>
     );
   }
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: colors.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.card}>
-          <Text style={styles.title}>ChronoPal</Text>
-          <Text style={styles.subtitle}>
+        <View style={[styles.card, { backgroundColor: colors.card }]}>
+          <Text style={[styles.title, { color: colors.textPrimary }]}>ChronoPal</Text>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
             {isSignUp ? 'Create your account' : 'Welcome back'}
           </Text>
 
           <View style={styles.form}>
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Email</Text>
+              <Text style={[styles.label, { color: colors.textPrimary }]}>Email</Text>
               <TextInput
-                style={styles.input}
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: colors.inputBackground,
+                    borderColor: colors.inputBorder,
+                    color: colors.textPrimary,
+                  },
+                ]}
                 placeholder="you@example.com"
-                placeholderTextColor="#94a3b8"
+                placeholderTextColor={colors.placeholder}
                 value={email}
                 onChangeText={setEmail}
                 autoCapitalize="none"
@@ -84,13 +111,25 @@ export const AuthScreen = () => {
             </View>
 
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Password</Text>
+              <Text style={[styles.label, { color: colors.textPrimary }]}>Password</Text>
               <TextInput
-                style={styles.input}
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: colors.inputBackground,
+                    borderColor: colors.inputBorder,
+                    color: colors.textPrimary,
+                  },
+                ]}
                 placeholder="••••••••"
-                placeholderTextColor="#94a3b8"
+                placeholderTextColor={colors.placeholder}
                 value={password}
-                onChangeText={setPassword}
+                onChangeText={(text) => {
+                  setPassword(text);
+                  if (isSignUp && passwordError) {
+                    setPasswordError('');
+                  }
+                }}
                 secureTextEntry
                 autoComplete={isSignUp ? 'password-new' : 'password'}
                 textContentType={isSignUp ? 'newPassword' : 'password'}
@@ -98,16 +137,62 @@ export const AuthScreen = () => {
               />
             </View>
 
-            {error && (
-              <View style={styles.errorContainer}>
-                <Text style={styles.errorText}>{error}</Text>
+            {isSignUp && (
+              <View style={styles.inputContainer}>
+                <Text style={[styles.label, { color: colors.textPrimary }]}>
+                  Confirm Password
+                </Text>
+                <TextInput
+                  style={[
+                    styles.input,
+                    {
+                      backgroundColor: colors.inputBackground,
+                      borderColor: colors.inputBorder,
+                      color: colors.textPrimary,
+                    },
+                  ]}
+                  placeholder="••••••••"
+                  placeholderTextColor={colors.placeholder}
+                  value={confirmPassword}
+                  onChangeText={(text) => {
+                    setConfirmPassword(text);
+                    if (passwordError) {
+                      setPasswordError('');
+                    }
+                  }}
+                  secureTextEntry
+                  autoComplete="password-new"
+                  textContentType="newPassword"
+                  editable={!loading}
+                />
+              </View>
+            )}
+
+            {passwordError && (
+              <View style={[styles.errorContainer, { backgroundColor: colors.error + '20' }]}>
+                <Text style={[styles.errorText, { color: colors.error }]}>{passwordError}</Text>
+              </View>
+            )}
+
+            {error && !passwordError && (
+              <View style={[styles.errorContainer, { backgroundColor: colors.error + '20' }]}>
+                <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text>
               </View>
             )}
 
             <TouchableOpacity
-              style={[styles.submitButton, loading && styles.submitButtonDisabled]}
+              style={[
+                styles.submitButton,
+                { backgroundColor: colors.primary },
+                loading && styles.submitButtonDisabled,
+              ]}
               onPress={handleSubmit}
-              disabled={loading || !email.trim() || !password.trim()}
+              disabled={
+                loading ||
+                !email.trim() ||
+                !password.trim() ||
+                (isSignUp && !confirmPassword.trim())
+              }
             >
               {loading ? (
                 <ActivityIndicator color="#ffffff" />
@@ -118,21 +203,31 @@ export const AuthScreen = () => {
               )}
             </TouchableOpacity>
 
-            <TouchableOpacity
+            <Pressable
               style={styles.switchButton}
               onPress={() => {
                 setIsSignUp(!isSignUp);
                 setEmail('');
                 setPassword('');
+                setConfirmPassword('');
+                setPasswordError('');
               }}
+              onHoverIn={() => setIsHovered(true)}
+              onHoverOut={() => setIsHovered(false)}
               disabled={loading}
             >
-              <Text style={styles.switchText}>
+              <Text
+                style={[
+                  styles.switchText,
+                  { color: colors.textSecondary },
+                  isHovered && { color: colors.primary },
+                ]}
+              >
                 {isSignUp
                   ? 'Already have an account? Sign in'
                   : "Don't have an account? Sign up"}
               </Text>
-            </TouchableOpacity>
+            </Pressable>
           </View>
         </View>
       </ScrollView>
@@ -143,30 +238,29 @@ export const AuthScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f172a',
   },
   loadingContainer: {
     flex: 1,
-    backgroundColor: '#0f172a',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 16,
   },
   loadingText: {
-    color: '#ffffff',
     fontSize: 16,
   },
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
+    alignItems: 'center',
     paddingHorizontal: 24,
     paddingVertical: 48,
   },
   card: {
-    backgroundColor: '#ffffff',
     borderRadius: 24,
     padding: 32,
     gap: 24,
+    width: '100%',
+    maxWidth: 400,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,
@@ -176,12 +270,10 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 32,
     fontWeight: '700',
-    color: '#0f172a',
     textAlign: 'center',
   },
   subtitle: {
     fontSize: 16,
-    color: '#64748b',
     textAlign: 'center',
   },
   form: {
@@ -193,29 +285,22 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#0f172a',
   },
   input: {
-    backgroundColor: '#f1f5f9',
     borderRadius: 12,
     padding: 16,
     fontSize: 16,
-    color: '#0f172a',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
   },
   errorContainer: {
-    backgroundColor: '#fee2e2',
     borderRadius: 8,
     padding: 12,
   },
   errorText: {
-    color: '#dc2626',
     fontSize: 14,
     textAlign: 'center',
   },
   submitButton: {
-    backgroundColor: '#7f78d2',
     borderRadius: 12,
     padding: 16,
     alignItems: 'center',
@@ -234,7 +319,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   switchText: {
-    color: '#64748b',
     fontSize: 14,
   },
 });

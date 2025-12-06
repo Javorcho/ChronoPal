@@ -5,6 +5,7 @@ import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { AuthScreen } from '@/screens/AuthScreen';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useScheduleStore } from '@/store/useScheduleStore';
+import { useTheme } from '@/store/useThemeStore';
 
 export default function App() {
   // Select individual properties to avoid infinite loop
@@ -15,6 +16,8 @@ export default function App() {
   const activities = useScheduleStore((state) => state.activities);
   const scheduleLoading = useScheduleStore((state) => state.loading);
   const initSchedule = useScheduleStore((state) => state.initialize);
+
+  const { colors, isDark } = useTheme();
 
   useEffect(() => {
     initAuth();
@@ -28,12 +31,12 @@ export default function App() {
 
   if (authLoading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.card}>
-          <Text style={styles.title}>ChronoPal</Text>
-          <Text style={styles.subtitle}>Loading...</Text>
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <View style={[styles.card, { backgroundColor: colors.card }]}>
+          <Text style={[styles.title, { color: colors.textPrimary }]}>ChronoPal</Text>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Loading...</Text>
         </View>
-        <StatusBar style="dark" />
+        <StatusBar style={isDark ? 'light' : 'dark'} />
       </SafeAreaView>
     );
   }
@@ -42,28 +45,30 @@ export default function App() {
     return (
       <>
         <AuthScreen />
-        <StatusBar style="light" />
+        <StatusBar style={isDark ? 'light' : 'dark'} />
       </>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.card}>
-        <Text style={styles.title}>ChronoPal</Text>
-        <Text style={styles.subtitle}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={[styles.card, { backgroundColor: colors.card }]}>
+        <Text style={[styles.title, { color: colors.textPrimary }]}>ChronoPal</Text>
+        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
           {scheduleLoading ? 'Syncing weekly plan…' : 'Welcome back!'}
         </Text>
         <View style={styles.metaRow}>
-          <Text style={styles.metaLabel}>Activities:</Text>
-          <Text style={styles.metaValue}>{activities.length}</Text>
+          <Text style={[styles.metaLabel, { color: colors.textSecondary }]}>Activities:</Text>
+          <Text style={[styles.metaValue, { color: colors.textPrimary }]}>{activities.length}</Text>
         </View>
         <View style={styles.metaRow}>
-          <Text style={styles.metaLabel}>User:</Text>
-          <Text style={styles.metaValue}>{user?.email ?? user?.uid}</Text>
+          <Text style={[styles.metaLabel, { color: colors.textSecondary }]}>User:</Text>
+          <Text style={[styles.metaValue, { color: colors.textPrimary }]}>
+            {user?.email ?? user?.uid}
+          </Text>
         </View>
       </View>
-      <StatusBar style="dark" />
+      <StatusBar style={isDark ? 'light' : 'dark'} />
     </SafeAreaView>
   );
 }
@@ -71,7 +76,6 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f172a',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,
@@ -80,7 +84,6 @@ const styles = StyleSheet.create({
     width: '100%',
     borderRadius: 20,
     padding: 24,
-    backgroundColor: '#ffffff',
     gap: 12,
     shadowColor: '#000',
     shadowOpacity: 0.1,
@@ -91,11 +94,9 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#0f172a',
   },
   subtitle: {
     fontSize: 14,
-    color: '#475569',
   },
   metaRow: {
     flexDirection: 'row',
@@ -103,11 +104,9 @@ const styles = StyleSheet.create({
   },
   metaLabel: {
     fontSize: 14,
-    color: '#64748b',
   },
   metaValue: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#0f172a',
   },
 });
