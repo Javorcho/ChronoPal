@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import { useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -12,15 +14,164 @@ import {
   View,
 } from 'react-native';
 
+import { OAuthProvider } from '@/services/authService';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useTheme } from '@/store/useThemeStore';
+
+// Google "G" logo
+const GoogleIcon = () => (
+  <Image
+    source={{ uri: 'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg' }}
+    style={styles.providerIcon}
+    resizeMode="contain"
+  />
+);
+
+// Apple logo using Ionicons
+const AppleIcon = () => (
+  <Ionicons name="logo-apple" size={22} color="#000000" />
+);
+
+// Microsoft logo (4 colored squares)
+const MicrosoftIcon = () => (
+  <View style={styles.microsoftGrid}>
+    <View style={[styles.microsoftSquare, { backgroundColor: '#f25022' }]} />
+    <View style={[styles.microsoftSquare, { backgroundColor: '#7fba00' }]} />
+    <View style={[styles.microsoftSquare, { backgroundColor: '#00a4ef' }]} />
+    <View style={[styles.microsoftSquare, { backgroundColor: '#ffb900' }]} />
+  </View>
+);
+
+// Submit button with hover effect
+const SubmitButton = ({
+  onPress,
+  loading,
+  disabled,
+  label,
+  primaryColor,
+}: {
+  onPress: () => void;
+  loading: boolean;
+  disabled: boolean;
+  label: string;
+  primaryColor: string;
+}) => {
+  const [isHovered, setIsHovered] = useState(false);
+  const [isPressed, setIsPressed] = useState(false);
+
+  // Darken color for hover/press states
+  const adjustColor = (color: string, amount: number) => {
+    const hex = color.replace('#', '');
+    const r = Math.max(0, parseInt(hex.substring(0, 2), 16) + amount);
+    const g = Math.max(0, parseInt(hex.substring(2, 4), 16) + amount);
+    const b = Math.max(0, parseInt(hex.substring(4, 6), 16) + amount);
+    return `rgb(${r}, ${g}, ${b})`;
+  };
+
+  const getBackgroundColor = () => {
+    if (disabled) return primaryColor;
+    if (isPressed) return adjustColor(primaryColor, -40);
+    if (isHovered) return adjustColor(primaryColor, -20);
+    return primaryColor;
+  };
+
+  return (
+    <Pressable
+      style={[
+        styles.submitButton,
+        { backgroundColor: getBackgroundColor() },
+        disabled && styles.submitButtonDisabled,
+      ]}
+      onPress={onPress}
+      onHoverIn={() => setIsHovered(true)}
+      onHoverOut={() => setIsHovered(false)}
+      onPressIn={() => setIsPressed(true)}
+      onPressOut={() => setIsPressed(false)}
+      disabled={disabled}
+    >
+      {loading ? (
+        <ActivityIndicator color="#ffffff" />
+      ) : (
+        <Text style={styles.submitButtonText}>{label}</Text>
+      )}
+    </Pressable>
+  );
+};
+
+// Social provider button component following official design guidelines
+const SocialButton = ({
+  provider,
+  onPress,
+  loading,
+  disabled,
+}: {
+  provider: OAuthProvider;
+  onPress: () => void;
+  loading: boolean;
+  disabled: boolean;
+}) => {
+  const [isHovered, setIsHovered] = useState(false);
+  const [isPressed, setIsPressed] = useState(false);
+
+  const providerStyles: Record<OAuthProvider, { label: string }> = {
+    google: { label: 'Continue with Google' },
+    azure: { label: 'Continue with Microsoft' },
+    apple: { label: 'Continue with Apple' },
+  };
+
+  const renderIcon = () => {
+    switch (provider) {
+      case 'google':
+        return <GoogleIcon />;
+      case 'azure':
+        return <MicrosoftIcon />;
+      case 'apple':
+        return <AppleIcon />;
+    }
+  };
+
+  // Determine background color based on state
+  const getBackgroundColor = () => {
+    if (disabled) return '#ffffff';
+    if (isPressed) return '#d0d0d0';
+    if (isHovered) return '#e8e8e8';
+    return '#ffffff';
+  };
+
+  return (
+    <Pressable
+      style={[
+        styles.socialButton,
+        { backgroundColor: getBackgroundColor() },
+        disabled && styles.socialButtonDisabled,
+      ]}
+      onPress={onPress}
+      onHoverIn={() => setIsHovered(true)}
+      onHoverOut={() => setIsHovered(false)}
+      onPressIn={() => setIsPressed(true)}
+      onPressOut={() => setIsPressed(false)}
+      disabled={disabled}
+    >
+      {loading ? (
+        <ActivityIndicator size="small" color="#000000" />
+      ) : (
+        <View style={styles.socialButtonContent}>
+          <View style={styles.socialIconContainer}>{renderIcon()}</View>
+          <Text style={styles.socialButtonText}>{providerStyles[provider].label}</Text>
+        </View>
+      )}
+    </Pressable>
+  );
+};
 
 export const AuthScreen = () => {
   // Select individual properties to avoid infinite loop
   const initializing = useAuthStore((state) => state.initializing);
   const error = useAuthStore((state) => state.error);
+  const oauthLoading = useAuthStore((state) => state.oauthLoading);
   const signIn = useAuthStore((state) => state.signIn);
   const signUp = useAuthStore((state) => state.signUp);
+  const signInOAuth = useAuthStore((state) => state.signInOAuth);
 
   const { colors } = useTheme();
 
@@ -31,6 +182,8 @@ export const AuthScreen = () => {
   const [loading, setLoading] = useState(false);
   const [passwordError, setPasswordError] = useState('');
   const [isHovered, setIsHovered] = useState(false);
+
+  const isAnyLoading = loading || !!oauthLoading;
 
   const handleSubmit = async () => {
     if (!email.trim() || !password.trim()) {
@@ -106,7 +259,7 @@ export const AuthScreen = () => {
                 keyboardType="email-address"
                 autoComplete="email"
                 textContentType="emailAddress"
-                editable={!loading}
+                editable={!isAnyLoading}
               />
             </View>
 
@@ -133,7 +286,7 @@ export const AuthScreen = () => {
                 secureTextEntry
                 autoComplete={isSignUp ? 'password-new' : 'password'}
                 textContentType={isSignUp ? 'newPassword' : 'password'}
-                editable={!loading}
+                editable={!isAnyLoading}
               />
             </View>
 
@@ -163,7 +316,7 @@ export const AuthScreen = () => {
                   secureTextEntry
                   autoComplete="password-new"
                   textContentType="newPassword"
-                  editable={!loading}
+                  editable={!isAnyLoading}
                 />
               </View>
             )}
@@ -180,28 +333,54 @@ export const AuthScreen = () => {
               </View>
             )}
 
-            <TouchableOpacity
-              style={[
-                styles.submitButton,
-                { backgroundColor: colors.primary },
-                loading && styles.submitButtonDisabled,
-              ]}
+            <SubmitButton
               onPress={handleSubmit}
+              loading={loading}
               disabled={
-                loading ||
+                isAnyLoading ||
                 !email.trim() ||
                 !password.trim() ||
                 (isSignUp && !confirmPassword.trim())
               }
-            >
-              {loading ? (
-                <ActivityIndicator color="#ffffff" />
-              ) : (
-                <Text style={styles.submitButtonText}>
-                  {isSignUp ? 'Sign Up' : 'Sign In'}
-                </Text>
-              )}
-            </TouchableOpacity>
+              label={isSignUp ? 'Sign Up' : 'Sign In'}
+              primaryColor={colors.primary}
+            />
+
+            {/* Social Login - Only show for Sign In */}
+            {!isSignUp && (
+              <>
+                {/* Divider */}
+                <View style={styles.dividerContainer}>
+                  <View style={[styles.dividerLine, { backgroundColor: colors.inputBorder }]} />
+                  <Text style={[styles.dividerText, { color: colors.textSecondary }]}>
+                    or continue with
+                  </Text>
+                  <View style={[styles.dividerLine, { backgroundColor: colors.inputBorder }]} />
+                </View>
+
+                {/* Social Login Buttons */}
+                <View style={styles.socialButtonsContainer}>
+                  <SocialButton
+                    provider="google"
+                    onPress={() => signInOAuth('google')}
+                    loading={oauthLoading === 'google'}
+                    disabled={isAnyLoading}
+                  />
+                  <SocialButton
+                    provider="azure"
+                    onPress={() => signInOAuth('azure')}
+                    loading={oauthLoading === 'azure'}
+                    disabled={isAnyLoading}
+                  />
+                  <SocialButton
+                    provider="apple"
+                    onPress={() => signInOAuth('apple')}
+                    loading={oauthLoading === 'apple'}
+                    disabled={isAnyLoading}
+                  />
+                </View>
+              </>
+            )}
 
             <Pressable
               style={styles.switchButton}
@@ -214,7 +393,7 @@ export const AuthScreen = () => {
               }}
               onHoverIn={() => setIsHovered(true)}
               onHoverOut={() => setIsHovered(false)}
-              disabled={loading}
+              disabled={isAnyLoading}
             >
               <Text
                 style={[
@@ -320,6 +499,69 @@ const styles = StyleSheet.create({
   },
   switchText: {
     fontSize: 14,
+  },
+  dividerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 8,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+  },
+  dividerText: {
+    paddingHorizontal: 16,
+    fontSize: 14,
+  },
+  socialButtonsContainer: {
+    gap: 12,
+  },
+  socialButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 24,
+    backgroundColor: '#ffffff',
+    minHeight: 50,
+  },
+  socialButtonDisabled: {
+    opacity: 0.6,
+  },
+  socialButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  socialIconContainer: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  socialButtonText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#000000',
+    lineHeight: 24,
+  },
+  // Provider icon styles
+  providerIcon: {
+    width: 22,
+    height: 22,
+  },
+  // Microsoft icon styles
+  microsoftGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    width: 20,
+    height: 20,
+    gap: 2,
+  },
+  microsoftSquare: {
+    width: 9,
+    height: 9,
   },
 });
 
