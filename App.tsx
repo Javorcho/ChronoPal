@@ -67,7 +67,7 @@ export default function App() {
             {user?.email ?? user?.uid}
           </Text>
         </View>
-      </View>
+    </View>
       <StatusBar style={isDark ? 'light' : 'dark'} />
     </SafeAreaView>
   );
