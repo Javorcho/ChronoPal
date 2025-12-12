@@ -69,7 +69,7 @@ export const useScheduleStore = create<ScheduleState>()((set, get) => ({
         console.warn('[useScheduleStore] Failed to fetch activities', error);
         set({
           activities: getMockActivities(resolvedUserId),
-          loading: false,
+        loading: false,
           hydrated: true,
           error: (error as Error).message,
         });
@@ -95,7 +95,7 @@ export const useScheduleStore = create<ScheduleState>()((set, get) => ({
 
       try {
         const created = await createActivity(payload);
-        set((state) => ({
+      set((state) => ({
           activities: [...state.activities, created],
         }));
         return created;
@@ -107,16 +107,16 @@ export const useScheduleStore = create<ScheduleState>()((set, get) => ({
     updateActivity: async (id, updates) => {
       try {
         await persistActivity(id, updates);
-        set((state) => ({
-          activities: state.activities.map((activity) =>
-            activity.id === id
-              ? {
-                  ...activity,
-                  ...updates,
-                  updatedAt: Date.now(),
-                }
-              : activity,
-          ),
+      set((state) => ({
+        activities: state.activities.map((activity) =>
+          activity.id === id
+            ? {
+                ...activity,
+                ...updates,
+                updatedAt: Date.now(),
+              }
+            : activity,
+        ),
         }));
       } catch (error) {
         set({ error: (error as Error).message });
@@ -125,8 +125,8 @@ export const useScheduleStore = create<ScheduleState>()((set, get) => ({
     removeActivity: async (id) => {
       try {
         await deleteActivity(id);
-        set((state) => ({
-          activities: state.activities.filter((activity) => activity.id !== id),
+      set((state) => ({
+        activities: state.activities.filter((activity) => activity.id !== id),
         }));
       } catch (error) {
         set({ error: (error as Error).message });
