@@ -2,57 +2,73 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
 
+import { AuthScreen } from '@/screens/AuthScreen';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useScheduleStore } from '@/store/useScheduleStore';
+import { useTheme } from '@/store/useThemeStore';
 
 export default function App() {
-  const { user, initializing: authLoading, initialize: initAuth } = useAuthStore(
-    (state) => ({
-      user: state.user,
-      initializing: state.initializing,
-      initialize: state.initialize,
-    }),
-  );
+  // Select individual properties to avoid infinite loop
+  const user = useAuthStore((state) => state.user);
+  const authLoading = useAuthStore((state) => state.initializing);
+  const initAuth = useAuthStore((state) => state.initialize);
 
-  const {
-    activities,
-    loading: scheduleLoading,
-    initialize: initSchedule,
-  } = useScheduleStore((state) => ({
-    activities: state.activities,
-    loading: state.loading,
-    initialize: state.initialize,
-  }));
+  const activities = useScheduleStore((state) => state.activities);
+  const scheduleLoading = useScheduleStore((state) => state.loading);
+  const initSchedule = useScheduleStore((state) => state.initialize);
+
+  const { colors, isDark } = useTheme();
 
   useEffect(() => {
     initAuth();
   }, [initAuth]);
 
   useEffect(() => {
-    if (!authLoading) {
-      initSchedule(user?.uid);
+    if (!authLoading && user) {
+      initSchedule(user.uid);
     }
-  }, [authLoading, user?.uid, initSchedule]);
+  }, [authLoading, user, initSchedule]);
+
+  if (authLoading) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+        <View style={[styles.card, { backgroundColor: colors.card }]}>
+          <Text style={[styles.title, { color: colors.textPrimary }]}>ChronoPal</Text>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Loading...</Text>
+        </View>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
+      </SafeAreaView>
+    );
+  }
+
+  if (!user) {
+    return (
+      <>
+        <AuthScreen />
+        <StatusBar style={isDark ? 'light' : 'dark'} />
+      </>
+    );
+  }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.card}>
-        <Text style={styles.title}>ChronoPal Foundation</Text>
-        <Text style={styles.subtitle}>
-          {scheduleLoading ? 'Syncing weekly plan…' : 'Data layer ready'}
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={[styles.card, { backgroundColor: colors.card }]}>
+        <Text style={[styles.title, { color: colors.textPrimary }]}>ChronoPal</Text>
+        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+          {scheduleLoading ? 'Syncing weekly plan…' : 'Welcome back!'}
         </Text>
         <View style={styles.metaRow}>
-          <Text style={styles.metaLabel}>Activities:</Text>
-          <Text style={styles.metaValue}>{activities.length}</Text>
+          <Text style={[styles.metaLabel, { color: colors.textSecondary }]}>Activities:</Text>
+          <Text style={[styles.metaValue, { color: colors.textPrimary }]}>{activities.length}</Text>
         </View>
         <View style={styles.metaRow}>
-          <Text style={styles.metaLabel}>Mode:</Text>
-          <Text style={styles.metaValue}>
-            {user ? user.email ?? user.uid : 'Demo data'}
+          <Text style={[styles.metaLabel, { color: colors.textSecondary }]}>User:</Text>
+          <Text style={[styles.metaValue, { color: colors.textPrimary }]}>
+            {user?.email ?? user?.uid}
           </Text>
         </View>
       </View>
-      <StatusBar style="dark" />
+      <StatusBar style={isDark ? 'light' : 'dark'} />
     </SafeAreaView>
   );
 }
@@ -60,7 +76,6 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f172a',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,
@@ -69,7 +84,6 @@ const styles = StyleSheet.create({
     width: '100%',
     borderRadius: 20,
     padding: 24,
-    backgroundColor: '#ffffff',
     gap: 12,
     shadowColor: '#000',
     shadowOpacity: 0.1,
@@ -80,11 +94,9 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#0f172a',
   },
   subtitle: {
     fontSize: 14,
-    color: '#475569',
   },
   metaRow: {
     flexDirection: 'row',
@@ -92,11 +104,9 @@ const styles = StyleSheet.create({
   },
   metaLabel: {
     fontSize: 14,
-    color: '#64748b',
   },
   metaValue: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#0f172a',
   },
 });
