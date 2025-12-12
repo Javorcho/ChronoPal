@@ -8,6 +8,21 @@ import { getSupabaseClient } from '@/lib/supabase';
 // Required for web OAuth
 WebBrowser.maybeCompleteAuthSession();
 
+// Clean up URL after OAuth callback (web only)
+const cleanupOAuthUrl = () => {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    const url = window.location.href;
+    // Check if we're on a callback URL with hash params
+    if (url.includes('auth/callback') || url.includes('#access_token') || url.includes('#error')) {
+      // Replace the URL with the base path
+      window.history.replaceState({}, document.title, '/');
+    }
+  }
+};
+
+// Clean up URL on module load (handles page refresh on callback URL)
+cleanupOAuthUrl();
+
 export type AuthCredentials = {
   email: string;
   password: string;
@@ -53,6 +68,12 @@ export const subscribeToAuthChanges = (
     const user = session?.user
       ? { uid: session.user.id, email: session.user.email ?? undefined }
       : undefined;
+    
+    // Clean up OAuth callback URL on successful sign in
+    if (event === 'SIGNED_IN' && user) {
+      cleanupOAuthUrl();
+    }
+    
     callback(user);
   });
 
