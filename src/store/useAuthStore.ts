@@ -18,7 +18,7 @@ type AuthState = {
   oauthLoading?: OAuthProvider;
   initialize: () => void;
   signIn: (credentials: AuthCredentials) => Promise<void>;
-  signUp: (credentials: AuthCredentials) => Promise<void>;
+  signUp: (credentials: AuthCredentials) => Promise<{ sessionCreated: boolean }>;
   signInOAuth: (provider: OAuthProvider) => Promise<void>;
   signOut: () => Promise<void>;
 };
@@ -53,10 +53,16 @@ export const useAuthStore = create<AuthState>()((set) => ({
     },
     signUp: async (credentials) => {
       try {
-        await signUpWithEmail(credentials);
+        const { user, sessionCreated } = await signUpWithEmail(credentials);
         set({ error: undefined });
+        // If session was created (email confirmation disabled), set the user directly
+        if (sessionCreated && user) {
+          set({ user });
+        }
+        return { sessionCreated };
       } catch (error) {
         set({ error: (error as Error).message });
+        return { sessionCreated: false };
       }
     },
     signInOAuth: async (provider) => {
