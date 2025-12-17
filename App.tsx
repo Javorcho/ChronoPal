@@ -8,7 +8,6 @@ import { useScheduleStore } from '@/store/useScheduleStore';
 import { useTheme } from '@/store/useThemeStore';
 
 export default function App() {
-  // Select individual properties to avoid infinite loop
   const user = useAuthStore((state) => state.user);
   const authLoading = useAuthStore((state) => state.initializing);
   const initAuth = useAuthStore((state) => state.initialize);

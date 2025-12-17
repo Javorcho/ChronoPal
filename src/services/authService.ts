@@ -34,6 +34,15 @@ const toAuthUser = (user: any, accessToken?: string): AuthUser | undefined =>
 
 // Get the redirect URI for OAuth
 const getRedirectUri = () => {
+  if (Platform.OS === 'web') {
+    // On web, redirect to the current origin (Supabase will handle the hash)
+    if (typeof window !== 'undefined') {
+      return window.location.origin;
+    }
+    return 'http://localhost:8081';
+  }
+  
+  // On native, use deep link
   return makeRedirectUri({
     scheme: 'chronopal',
     path: 'auth/callback',
@@ -49,10 +58,34 @@ export const subscribeToAuthChanges = (
   }
 
   const supabase = getSupabaseClient();
+  
+  // Check for existing session first (including from OAuth callback URL)
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    if (session?.user) {
+      callback(toAuthUser(session.user));
+      // Clean up URL if we're on OAuth callback
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        const hash = window.location.hash;
+        if (hash.includes('access_token') || hash.includes('error')) {
+          // Remove the hash from URL
+          window.history.replaceState(null, '', window.location.pathname);
+        }
+      }
+    }
+  });
+  
+  // Subscribe to auth changes
   const { data } = supabase.auth.onAuthStateChange((event, session) => {
-    const user = session?.user
-      ? { uid: session.user.id, email: session.user.email ?? undefined }
-      : undefined;
+    const user = session?.user ? toAuthUser(session.user) : undefined;
+    
+    // Clean up OAuth callback URL on web
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && event === 'SIGNED_IN') {
+      const hash = window.location.hash;
+      if (hash.includes('access_token') || hash.includes('error')) {
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+    }
+    
     callback(user);
   });
 
@@ -174,6 +207,7 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
     }
   }
 
+  // On web, the page will redirect - the session will be picked up by onAuthStateChange
   return undefined;
 };
 
@@ -196,4 +230,3 @@ export const getSessionWithToken = async () => {
     providerRefreshToken: data.session.provider_refresh_token,
   };
 };
-
