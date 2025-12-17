@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { AuthScreen } from '@/screens/AuthScreen';
 import { WeeklyGridScreen } from '@/screens/WeeklyGridScreen';
@@ -8,7 +8,6 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { useTheme } from '@/store/useThemeStore';
 
 export default function App() {
-  // Select individual properties to avoid infinite loop
   const user = useAuthStore((state) => state.user);
   const authLoading = useAuthStore((state) => state.initializing);
   const initAuth = useAuthStore((state) => state.initialize);
@@ -24,6 +23,7 @@ export default function App() {
     return (
       <View style={[styles.loadingContainer, { backgroundColor: colors.background }]}>
         <View style={[styles.loadingCard, { backgroundColor: colors.card }]}>
+          <ActivityIndicator size="large" color={colors.primary} />
           <Text style={[styles.loadingTitle, { color: colors.textPrimary }]}>ChronoPal</Text>
           <Text style={[styles.loadingSubtitle, { color: colors.textSecondary }]}>Loading...</Text>
         </View>
@@ -60,8 +60,8 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 320,
     borderRadius: 20,
-    padding: 24,
-    gap: 12,
+    padding: 32,
+    gap: 16,
     alignItems: 'center',
     shadowColor: '#000',
     shadowOpacity: 0.1,

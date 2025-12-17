@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import {
-  Dimensions,
   Platform,
   Pressable,
   ScrollView,
@@ -700,3 +699,4 @@ const styles = StyleSheet.create({
     height: 32,
   },
 });
+

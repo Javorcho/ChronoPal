@@ -8,20 +8,43 @@ import { getSupabaseClient } from '@/lib/supabase';
 // Required for web OAuth
 WebBrowser.maybeCompleteAuthSession();
 
-// Clean up URL after OAuth callback (web only)
-const cleanupOAuthUrl = () => {
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    const url = window.location.href;
-    // Check if we're on a callback URL with hash params
-    if (url.includes('auth/callback') || url.includes('#access_token') || url.includes('#error')) {
-      // Replace the URL with the base path
-      window.history.replaceState({}, document.title, '/');
+// Handle OAuth callback on web - must run early before React renders
+const handleWebOAuthCallback = async () => {
+  if (Platform.OS !== 'web' || typeof window === 'undefined' || !isSupabaseConfigured) {
+    return;
+  }
+
+  const hash = window.location.hash;
+  if (!hash || (!hash.includes('access_token') && !hash.includes('error'))) {
+    return;
+  }
+
+  // Parse hash params
+  const params = new URLSearchParams(hash.substring(1));
+  const accessToken = params.get('access_token');
+  const refreshToken = params.get('refresh_token');
+
+  if (accessToken && refreshToken) {
+    const supabase = getSupabaseClient();
+    try {
+      await supabase.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+      // Clean up URL
+      window.history.replaceState(null, '', window.location.pathname);
+    } catch (e) {
+      console.error('Failed to set session from OAuth callback:', e);
     }
+  } else if (params.get('error')) {
+    console.error('OAuth error:', params.get('error_description') || params.get('error'));
+    // Clean up URL even on error
+    window.history.replaceState(null, '', window.location.pathname);
   }
 };
 
-// Clean up URL on module load (handles page refresh on callback URL)
-cleanupOAuthUrl();
+// Run immediately on module load
+handleWebOAuthCallback();
 
 export type AuthCredentials = {
   email: string;
@@ -49,6 +72,11 @@ const toAuthUser = (user: any, accessToken?: string): AuthUser | undefined =>
 
 // Get the redirect URI for OAuth
 const getRedirectUri = () => {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    // On web, use the current origin so Supabase can detect the hash tokens
+    return window.location.origin;
+  }
+  // On native, use deep link
   return makeRedirectUri({
     scheme: 'chronopal',
     path: 'auth/callback',
@@ -64,16 +92,21 @@ export const subscribeToAuthChanges = (
   }
 
   const supabase = getSupabaseClient();
+  
+  // Check for existing session first (handles page refresh)
+  // The OAuth callback is handled at module load time by handleWebOAuthCallback
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    const user = session?.user
+      ? { uid: session.user.id, email: session.user.email ?? undefined }
+      : undefined;
+    callback(user);
+  });
+
+  // Subscribe to future auth changes
   const { data } = supabase.auth.onAuthStateChange((event, session) => {
     const user = session?.user
       ? { uid: session.user.id, email: session.user.email ?? undefined }
       : undefined;
-    
-    // Clean up OAuth callback URL on successful sign in
-    if (event === 'SIGNED_IN' && user) {
-      cleanupOAuthUrl();
-    }
-    
     callback(user);
   });
 
