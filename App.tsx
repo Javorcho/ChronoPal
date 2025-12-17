@@ -1,21 +1,17 @@
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { AuthScreen } from '@/screens/AuthScreen';
+import { WeeklyGridScreen } from '@/screens/WeeklyGridScreen';
 import { useAuthStore } from '@/store/useAuthStore';
-import { useScheduleStore } from '@/store/useScheduleStore';
 import { useTheme } from '@/store/useThemeStore';
 
 export default function App() {
-  // Select individual properties to avoid infinite loop
   const user = useAuthStore((state) => state.user);
   const authLoading = useAuthStore((state) => state.initializing);
   const initAuth = useAuthStore((state) => state.initialize);
-
-  const activities = useScheduleStore((state) => state.activities);
-  const scheduleLoading = useScheduleStore((state) => state.loading);
-  const initSchedule = useScheduleStore((state) => state.initialize);
+  const signOut = useAuthStore((state) => state.signOut);
 
   const { colors, isDark } = useTheme();
 
@@ -23,21 +19,16 @@ export default function App() {
     initAuth();
   }, [initAuth]);
 
-  useEffect(() => {
-    if (!authLoading && user) {
-      initSchedule(user.uid);
-    }
-  }, [authLoading, user, initSchedule]);
-
   if (authLoading) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <View style={[styles.card, { backgroundColor: colors.card }]}>
-          <Text style={[styles.title, { color: colors.textPrimary }]}>ChronoPal</Text>
-          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Loading...</Text>
+      <View style={[styles.loadingContainer, { backgroundColor: colors.background }]}>
+        <View style={[styles.loadingCard, { backgroundColor: colors.card }]}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={[styles.loadingTitle, { color: colors.textPrimary }]}>ChronoPal</Text>
+          <Text style={[styles.loadingSubtitle, { color: colors.textSecondary }]}>Loading...</Text>
         </View>
         <StatusBar style={isDark ? 'light' : 'dark'} />
-      </SafeAreaView>
+      </View>
     );
   }
 
@@ -51,62 +42,38 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={[styles.card, { backgroundColor: colors.card }]}>
-        <Text style={[styles.title, { color: colors.textPrimary }]}>ChronoPal</Text>
-        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-          {scheduleLoading ? 'Syncing weekly plan…' : 'Welcome back!'}
-        </Text>
-        <View style={styles.metaRow}>
-          <Text style={[styles.metaLabel, { color: colors.textSecondary }]}>Activities:</Text>
-          <Text style={[styles.metaValue, { color: colors.textPrimary }]}>{activities.length}</Text>
-        </View>
-        <View style={styles.metaRow}>
-          <Text style={[styles.metaLabel, { color: colors.textSecondary }]}>User:</Text>
-          <Text style={[styles.metaValue, { color: colors.textPrimary }]}>
-            {user?.email ?? user?.uid}
-          </Text>
-        </View>
-    </View>
+    <>
+      <WeeklyGridScreen onSignOut={signOut} />
       <StatusBar style={isDark ? 'light' : 'dark'} />
-    </SafeAreaView>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  loadingContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,
   },
-  card: {
+  loadingCard: {
     width: '100%',
+    maxWidth: 320,
     borderRadius: 20,
-    padding: 24,
-    gap: 12,
+    padding: 32,
+    gap: 16,
+    alignItems: 'center',
     shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
     elevation: 4,
   },
-  title: {
-    fontSize: 20,
+  loadingTitle: {
+    fontSize: 24,
     fontWeight: '700',
   },
-  subtitle: {
+  loadingSubtitle: {
     fontSize: 14,
-  },
-  metaRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  metaLabel: {
-    fontSize: 14,
-  },
-  metaValue: {
-    fontSize: 14,
-    fontWeight: '600',
   },
 });
