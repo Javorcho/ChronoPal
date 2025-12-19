@@ -21,19 +21,6 @@ import { useTheme } from '@/store/useThemeStore';
 // VALIDATION HELPERS
 // ===========================================
 
-// List of common valid email domains
-const VALID_DOMAINS = [
-  'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'live.com',
-  'icloud.com', 'me.com', 'mac.com', 'aol.com', 'protonmail.com',
-  'mail.com', 'zoho.com', 'yandex.com', 'gmx.com', 'inbox.com',
-  // Educational
-  'edu', 'ac.uk', 'edu.au',
-  // Country domains (allow any)
-  'co.uk', 'com.au', 'de', 'fr', 'es', 'it', 'nl', 'be', 'ch', 'at',
-  'bg', 'pl', 'cz', 'sk', 'hu', 'ro', 'ru', 'ua', 'jp', 'kr', 'cn',
-  'in', 'br', 'mx', 'ar', 'ca', 'nz', 'za',
-];
-
 const validateEmail = (email: string): { valid: boolean; error?: string } => {
   const trimmed = email.trim().toLowerCase();
   
@@ -63,17 +50,8 @@ const validateEmail = (email: string): { valid: boolean; error?: string } => {
     return { valid: false, error: 'Email domain must have a valid extension' };
   }
 
-  // Check against known valid domains or allow corporate/custom domains
-  const isKnownDomain = VALID_DOMAINS.some(d => 
-    domain === d || domain.endsWith('.' + d)
-  );
-  
-  // Allow any domain with proper structure (for corporate emails)
-  // Just ensure it's not obviously fake
-  if (!isKnownDomain && domainParts.length < 2) {
-    return { valid: false, error: 'Please use a valid email domain' };
-  }
-
+  // All structural validations passed (format, domain has dot, TLD length)
+  // Allow any properly structured domain (including corporate/custom domains)
   return { valid: true };
 };
 

@@ -127,25 +127,33 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut }: MobileWeekListPro
       {/* Days List */}
       <ScrollView
         style={styles.mobileList}
-        contentContainerStyle={styles.mobileListContent}
+        contentContainerStyle={styles.mobileListContentSmooth}
         showsVerticalScrollIndicator={false}
       >
-        {dayOrder.map((day) => {
+        {dayOrder.map((day, index) => {
           const isToday = day === currentDay;
+          const isFirst = index === 0;
+          const isLast = index === dayOrder.length - 1;
           return (
             <Pressable
               key={day}
               style={[
-                styles.dayRow,
-                { backgroundColor: colors.card },
-                isToday && { borderColor: colors.primary, borderWidth: 2 },
+                styles.dayRowSmooth,
+                { 
+                  backgroundColor: colors.card,
+                  borderBottomWidth: isLast ? 0 : 1,
+                  borderBottomColor: colors.border,
+                },
+                isToday && { backgroundColor: colors.primary + '10' },
+                isFirst && styles.dayRowFirst,
+                isLast && styles.dayRowLast,
               ]}
               onPress={() => onDayPress(day)}
             >
               <View style={styles.dayRowLeft}>
                 <View
                   style={[
-                    styles.dayIconContainer,
+                    styles.dayIconContainerSmooth,
                     { backgroundColor: isToday ? colors.primary : colors.inputBackground },
                   ]}
                 >
@@ -168,7 +176,7 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut }: MobileWeekListPro
                 </View>
               </View>
               <View style={styles.dayRowRight}>
-                <View style={[styles.activityCount, { backgroundColor: colors.inputBackground }]}>
+                <View style={[styles.activityCountSmooth, { backgroundColor: colors.inputBackground }]}>
                   <Text style={[styles.activityCountText, { color: colors.textSecondary }]}>
                     0
                   </Text>
@@ -179,27 +187,6 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut }: MobileWeekListPro
           );
         })}
       </ScrollView>
-
-      {/* Bottom Stats */}
-      <View style={[styles.statsBar, { backgroundColor: colors.card }]}>
-        <View style={styles.statItem}>
-          <Ionicons name="time-outline" size={18} color={colors.primary} />
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>0h</Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Week</Text>
-        </View>
-        <View style={[styles.statDivider, { backgroundColor: colors.inputBorder }]} />
-        <View style={styles.statItem}>
-          <Ionicons name="repeat-outline" size={18} color={colors.secondary} />
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>0</Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Recurring</Text>
-        </View>
-        <View style={[styles.statDivider, { backgroundColor: colors.inputBorder }]} />
-        <View style={styles.statItem}>
-          <Ionicons name="today-outline" size={18} color={colors.accent} />
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>0</Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Today</Text>
-        </View>
-      </View>
     </View>
   );
 };
@@ -293,27 +280,6 @@ const MobileDayExpanded = ({ day, isToday, onBack }: MobileDayExpandedProps) => 
           </View>
         </View>
       </ScrollView>
-
-      {/* Stats for this day */}
-      <View style={[styles.statsBar, { backgroundColor: colors.card }]}>
-        <View style={styles.statItem}>
-          <Ionicons name="list-outline" size={18} color={colors.primary} />
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>0</Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Activities</Text>
-        </View>
-        <View style={[styles.statDivider, { backgroundColor: colors.inputBorder }]} />
-        <View style={styles.statItem}>
-          <Ionicons name="time-outline" size={18} color={colors.secondary} />
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>0h</Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Scheduled</Text>
-        </View>
-        <View style={[styles.statDivider, { backgroundColor: colors.inputBorder }]} />
-        <View style={styles.statItem}>
-          <Ionicons name="repeat-outline" size={18} color={colors.accent} />
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>0</Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Recurring</Text>
-        </View>
-      </View>
     </View>
   );
 };
@@ -501,6 +467,10 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 12,
   },
+  mobileListContentSmooth: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
   dayRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -513,6 +483,21 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
+  dayRowSmooth: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  dayRowFirst: {
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
+  },
+  dayRowLast: {
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
+  },
   dayRowLeft: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -522,6 +507,13 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dayIconContainerSmooth: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -547,6 +539,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 10,
+  },
+  activityCountSmooth: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
   },
   activityCountText: {
     fontSize: 13,
