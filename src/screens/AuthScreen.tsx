@@ -80,12 +80,11 @@ const validatePassword = (password: string): { valid: boolean; errors: string[] 
 // COMPONENTS
 // ===========================================
 
-// Google "G" logo
+// Google "G" logo - PNG image
 const GoogleIcon = () => (
   <Image
-    source={{ uri: 'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg' }}
-    style={styles.providerIcon}
-    resizeMode="contain"
+    source={{ uri: 'https://www.google.com/images/branding/googleg/1x/googleg_standard_color_128dp.png' }}
+    style={styles.googleLogo}
   />
 );
 
@@ -724,6 +723,10 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   providerIcon: {
+    width: 22,
+    height: 22,
+  },
+  googleLogo: {
     width: 22,
     height: 22,
   },
