@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Platform,
   Pressable,
@@ -13,8 +13,108 @@ import {
 import { useTheme } from '@/store/useThemeStore';
 import { dayNames, DayOfWeek, dayOrder } from '@/types/schedule';
 
+// Inject custom scrollbar styles for web
+if (Platform.OS === 'web') {
+  const style = document.createElement('style');
+  style.textContent = `
+    [data-custom-scrollbar]::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    [data-custom-scrollbar]::-webkit-scrollbar-track {
+      background: rgba(128, 128, 128, 0.1);
+      border-radius: 4px;
+      margin: 4px;
+    }
+    [data-custom-scrollbar]::-webkit-scrollbar-thumb {
+      background: rgba(128, 128, 128, 0.35);
+      border-radius: 4px;
+    }
+    [data-custom-scrollbar]::-webkit-scrollbar-thumb:hover {
+      background: rgba(128, 128, 128, 0.5);
+    }
+    [data-custom-scrollbar] {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(128, 128, 128, 0.35) rgba(128, 128, 128, 0.1);
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+// Hook to add custom scrollbar attribute to ScrollView on web
+const useCustomScrollbar = () => {
+  const scrollRef = useRef<ScrollView>(null);
+  
+  useEffect(() => {
+    if (Platform.OS === 'web' && scrollRef.current) {
+      // @ts-ignore - accessing DOM node on web
+      const node = scrollRef.current as unknown as HTMLElement;
+      if (node && node.setAttribute) {
+        node.setAttribute('data-custom-scrollbar', 'true');
+      }
+    }
+  }, []);
+  
+  return scrollRef;
+};
+
 // Breakpoint for mobile vs desktop
 const MOBILE_BREAKPOINT = 768;
+
+// Logout button with hover effect for web, always red icon on mobile
+type LogoutButtonProps = {
+  onPress: () => void;
+  isMobile: boolean;
+  colors: any;
+};
+
+const LogoutButton = ({ onPress, isMobile, colors }: LogoutButtonProps) => {
+  const [isHovered, setIsHovered] = useState(false);
+  
+  const getIconColor = () => {
+    if (isMobile) {
+      return colors.error || '#EF4444'; // Red icon on mobile
+    }
+    // Desktop: red on hover, normal otherwise
+    return isHovered ? (colors.error || '#EF4444') : colors.textSecondary;
+  };
+
+  return (
+    <Pressable
+      style={[styles.signOutButton, { backgroundColor: colors.inputBackground }]}
+      onPress={onPress}
+      onHoverIn={() => setIsHovered(true)}
+      onHoverOut={() => setIsHovered(false)}
+    >
+      <Ionicons name="log-out-outline" size={20} color={getIconColor()} />
+    </Pressable>
+  );
+};
+
+// Get current week's date range (Monday to Sunday)
+const getWeekDateRange = () => {
+  const today = new Date();
+  const dayOfWeek = today.getDay();
+  // Adjust so Monday = 0
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + mondayOffset);
+  
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  
+  const formatDate = (date: Date) => `${months[date.getMonth()]} ${date.getDate()}`;
+  
+  // If same month, show "Dec 16 - 22, 2025"
+  if (monday.getMonth() === sunday.getMonth()) {
+    return `${formatDate(monday)} - ${sunday.getDate()}, ${sunday.getFullYear()}`;
+  }
+  // If different months, show "Dec 30 - Jan 5, 2025"
+  return `${formatDate(monday)} - ${formatDate(sunday)}, ${sunday.getFullYear()}`;
+};
 
 type WeeklyGridScreenProps = {
   onSignOut?: () => void;
@@ -107,98 +207,61 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut }: MobileWeekListPro
         <View style={styles.headerContent}>
           <View>
             <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
-              Weekly Schedule
-            </Text>
-            <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
-              Tap a day to view details
+              {getWeekDateRange()}
             </Text>
           </View>
           {onSignOut && (
-            <Pressable
-              style={[styles.signOutButton, { backgroundColor: colors.inputBackground }]}
-              onPress={onSignOut}
-            >
-              <Ionicons name="log-out-outline" size={20} color={colors.textSecondary} />
-            </Pressable>
+            <LogoutButton onPress={onSignOut} isMobile={true} colors={colors} />
           )}
         </View>
       </View>
 
       {/* Days List */}
-      <ScrollView
-        style={styles.mobileList}
-        contentContainerStyle={styles.mobileListContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {dayOrder.map((day) => {
+      <View style={styles.mobileListFull}>
+        {dayOrder.map((day, index) => {
           const isToday = day === currentDay;
+          const isLast = index === dayOrder.length - 1;
           return (
             <Pressable
               key={day}
               style={[
-                styles.dayRow,
-                { backgroundColor: colors.card },
-                isToday && { borderColor: colors.primary, borderWidth: 2 },
+                styles.dayRowTimeline,
+                { 
+                  backgroundColor: colors.card,
+                  borderBottomWidth: isLast ? 0 : 1,
+                  borderBottomColor: colors.border,
+                },
+                isToday && { backgroundColor: colors.primary + '08' },
               ]}
               onPress={() => onDayPress(day)}
             >
-              <View style={styles.dayRowLeft}>
-                <View
+              {/* Day Label */}
+              <View style={styles.dayLabelSection}>
+                <Text
                   style={[
-                    styles.dayIconContainer,
-                    { backgroundColor: isToday ? colors.primary : colors.inputBackground },
+                    styles.dayLabelText,
+                    { color: isToday ? colors.primary : colors.textSecondary },
                   ]}
                 >
-                  <Text
-                    style={[
-                      styles.dayIconText,
-                      { color: isToday ? '#fff' : colors.textSecondary },
-                    ]}
-                  >
-                    {dayNames[day]}
-                  </Text>
-                </View>
-                <View>
-                  <Text style={[styles.dayRowTitle, { color: colors.textPrimary }]}>
-                    {FULL_DAY_NAMES[day]}
-                  </Text>
-                  <Text style={[styles.dayRowSubtitle, { color: colors.textSecondary }]}>
-                    {isToday ? 'Today' : 'No activities'}
-                  </Text>
-                </View>
+                  {dayNames[day]}
+                </Text>
+                {isToday && (
+                  <View style={[styles.todayDot, { backgroundColor: colors.primary }]} />
+                )}
               </View>
-              <View style={styles.dayRowRight}>
-                <View style={[styles.activityCount, { backgroundColor: colors.inputBackground }]}>
-                  <Text style={[styles.activityCountText, { color: colors.textSecondary }]}>
-                    0
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
+
+              {/* Timeline Bar */}
+              <View style={[styles.timelineBar, { backgroundColor: colors.inputBackground }]}>
+                {/* Empty timeline - activities will be rendered here later */}
+              </View>
+
+              {/* Chevron */}
+              <View style={styles.chevronSection}>
+                <Ionicons name="chevron-forward" size={18} color={colors.placeholder} />
               </View>
             </Pressable>
           );
         })}
-      </ScrollView>
-
-      {/* Bottom Stats */}
-      <View style={[styles.statsBar, { backgroundColor: colors.card }]}>
-        <View style={styles.statItem}>
-          <Ionicons name="time-outline" size={18} color={colors.primary} />
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>0h</Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Week</Text>
-        </View>
-        <View style={[styles.statDivider, { backgroundColor: colors.inputBorder }]} />
-        <View style={styles.statItem}>
-          <Ionicons name="repeat-outline" size={18} color={colors.secondary} />
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>0</Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Recurring</Text>
-        </View>
-        <View style={[styles.statDivider, { backgroundColor: colors.inputBorder }]} />
-        <View style={styles.statItem}>
-          <Ionicons name="today-outline" size={18} color={colors.accent} />
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>0</Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Today</Text>
-        </View>
       </View>
     </View>
   );
@@ -293,27 +356,6 @@ const MobileDayExpanded = ({ day, isToday, onBack }: MobileDayExpandedProps) => 
           </View>
         </View>
       </ScrollView>
-
-      {/* Stats for this day */}
-      <View style={[styles.statsBar, { backgroundColor: colors.card }]}>
-        <View style={styles.statItem}>
-          <Ionicons name="list-outline" size={18} color={colors.primary} />
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>0</Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Activities</Text>
-        </View>
-        <View style={[styles.statDivider, { backgroundColor: colors.inputBorder }]} />
-        <View style={styles.statItem}>
-          <Ionicons name="time-outline" size={18} color={colors.secondary} />
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>0h</Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Scheduled</Text>
-        </View>
-        <View style={[styles.statDivider, { backgroundColor: colors.inputBorder }]} />
-        <View style={styles.statItem}>
-          <Ionicons name="repeat-outline" size={18} color={colors.accent} />
-          <Text style={[styles.statValue, { color: colors.textPrimary }]}>0</Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Recurring</Text>
-        </View>
-      </View>
     </View>
   );
 };
@@ -326,10 +368,24 @@ type DesktopWeekGridProps = {
   onSignOut?: () => void;
 };
 
+// Generate time slots from 6am to 10pm
+const TIME_SLOTS = Array.from({ length: 17 }, (_, i) => {
+  const hour = i + 6;
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = hour > 12 ? hour - 12 : hour;
+  return { hour, label: `${displayHour} ${ampm}` };
+});
+
+const HOUR_HEIGHT = 50; // Height of each hour slot in pixels
+
 const DesktopWeekGrid = ({ currentDay, onSignOut }: DesktopWeekGridProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
-  const DAY_COLUMN_WIDTH = Math.max((screenWidth - 80) / 7, 120);
+  const scrollRef = useCustomScrollbar();
+  const TIME_GUTTER_WIDTH = 56;
+  const GAP = 8;
+  const PADDING = 16;
+  const DAY_COLUMN_WIDTH = Math.max((screenWidth - TIME_GUTTER_WIDTH - PADDING * 2 - GAP * 6) / 7, 100);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -338,74 +394,121 @@ const DesktopWeekGrid = ({ currentDay, onSignOut }: DesktopWeekGridProps) => {
         <View style={styles.headerContent}>
           <View>
             <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
-              Weekly Schedule
-            </Text>
-            <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
-              Plan your week
+              {getWeekDateRange()}
             </Text>
           </View>
           {onSignOut && (
-            <Pressable
-              style={[styles.signOutButton, { backgroundColor: colors.inputBackground }]}
-              onPress={onSignOut}
-            >
-              <Ionicons name="log-out-outline" size={20} color={colors.textSecondary} />
-            </Pressable>
+            <LogoutButton onPress={onSignOut} isMobile={false} colors={colors} />
           )}
         </View>
       </View>
 
-      {/* Week Grid */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.gridContainer}
-      >
-        {dayOrder.map((day) => {
-          const isToday = day === currentDay;
-          return (
-            <View
-              key={day}
-              style={[
-                styles.dayColumn,
-                { backgroundColor: colors.card, width: DAY_COLUMN_WIDTH },
-                isToday && { borderColor: colors.primary, borderWidth: 2 },
-              ]}
-            >
-              {/* Day Header */}
+      {/* Time Grid with Day Columns */}
+      <View style={styles.desktopGridWrapper}>
+        {/* Time Gutter - for header alignment */}
+        <View style={{ width: TIME_GUTTER_WIDTH }} />
+        
+        {/* Day Columns with Headers */}
+        <View style={[styles.dayColumnsWrapper, { gap: GAP }]}>
+          {dayOrder.map((day) => {
+            const isToday = day === currentDay;
+            return (
               <View
+                key={day}
                 style={[
-                  styles.dayHeader,
-                  isToday && { backgroundColor: colors.primary + '20' },
+                  styles.desktopDayColumnFull,
+                  { 
+                    width: DAY_COLUMN_WIDTH,
+                    backgroundColor: colors.card,
+                  },
+                  isToday && { borderColor: colors.primary, borderWidth: 2 },
                 ]}
               >
-                <Text
+                {/* Day Header */}
+                <View
                   style={[
-                    styles.dayName,
-                    { color: isToday ? colors.primary : colors.textSecondary },
+                    styles.desktopDayHeader,
+                    isToday && { backgroundColor: colors.primary + '20' },
                   ]}
                 >
-                  {dayNames[day]}
-                </Text>
-                {isToday && (
-                  <View style={[styles.todayBadge, { backgroundColor: colors.primary }]}>
-                    <Text style={styles.todayText}>Today</Text>
-                  </View>
-                )}
-              </View>
-
-              {/* Empty Content Area */}
-              <View style={styles.dayContent}>
-                <View style={styles.emptyDaySmall}>
-                  <Ionicons name="calendar-outline" size={24} color={colors.placeholder} />
-                  <Text style={[styles.emptyText, { color: colors.placeholder }]}>
-                    No activities
+                  <Text
+                    style={[
+                      styles.dayName,
+                      { color: isToday ? colors.primary : colors.textSecondary },
+                    ]}
+                  >
+                    {dayNames[day]}
                   </Text>
+                  {isToday && (
+                    <View style={[styles.todayBadge, { backgroundColor: colors.primary }]}>
+                      <Text style={styles.todayText}>Today</Text>
+                    </View>
+                  )}
                 </View>
               </View>
-            </View>
-          );
-        })}
+            );
+          })}
+        </View>
+      </View>
+
+      {/* Scrollable Time Grid */}
+      <ScrollView
+        ref={scrollRef}
+        style={styles.desktopGridScroll}
+        showsVerticalScrollIndicator={true}
+      >
+        <View style={styles.desktopGridRow}>
+          {/* Time Labels Column */}
+          <View style={[styles.timeGutter, { width: TIME_GUTTER_WIDTH }]}>
+            {TIME_SLOTS.map((slot) => (
+              <View key={slot.hour} style={[styles.timeGutterSlot, { height: HOUR_HEIGHT }]}>
+                <Text style={[styles.timeGutterLabel, { color: colors.textSecondary }]}>
+                  {slot.label}
+                </Text>
+              </View>
+            ))}
+          </View>
+
+          {/* Day Columns Grid */}
+          <View style={[styles.dayColumnsWrapper, { gap: GAP }]}>
+            {dayOrder.map((day) => {
+              const isToday = day === currentDay;
+              return (
+                <View
+                  key={day}
+                  style={[
+                    styles.desktopDayColumnGrid,
+                    { 
+                      width: DAY_COLUMN_WIDTH,
+                      backgroundColor: colors.card,
+                    },
+                    isToday && { 
+                      backgroundColor: colors.primary + '08',
+                      borderLeftColor: colors.primary,
+                      borderRightColor: colors.primary,
+                      borderLeftWidth: 2,
+                      borderRightWidth: 2,
+                    },
+                  ]}
+                >
+                  {TIME_SLOTS.map((slot) => (
+                    <View
+                      key={slot.hour}
+                      style={[
+                        styles.desktopHourCell,
+                        { 
+                          height: HOUR_HEIGHT,
+                          borderTopColor: colors.border,
+                          borderTopWidth: 1,
+                        },
+                      ]}
+                    />
+                  ))}
+                </View>
+              );
+            })}
+          </View>
+        </View>
       </ScrollView>
 
       {/* Bottom Stats */}
@@ -501,6 +604,56 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 12,
   },
+  mobileListContentSmooth: {
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+  },
+  mobileListFull: {
+    flex: 1,
+  },
+  dayRowFull: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+  },
+  dayRowTimeline: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    gap: 12,
+  },
+  dayLabelSection: {
+    width: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dayLabelText: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  todayDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    marginTop: 4,
+  },
+  timelineBar: {
+    flex: 1,
+    height: '70%',
+    borderRadius: 6,
+    overflow: 'hidden',
+    flexDirection: 'row',
+  },
+  chevronSection: {
+    width: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   dayRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -513,6 +666,19 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
+  dayRowSmooth: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  dayRowFirst: {
+    // Full width, no rounding
+  },
+  dayRowLast: {
+    // Full width, no rounding
+  },
   dayRowLeft: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -522,6 +688,13 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dayIconContainerSmooth: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -547,6 +720,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 10,
+  },
+  activityCountSmooth: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
   },
   activityCountText: {
     fontSize: 13,
@@ -612,7 +790,53 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
 
-  // Desktop Grid
+  // Desktop Grid - Time Grid Layout
+  desktopGridWrapper: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+  },
+  dayColumnsWrapper: {
+    flexDirection: 'row',
+    flex: 1,
+  },
+  desktopDayColumnFull: {
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
+    overflow: 'hidden',
+  },
+  desktopDayHeader: {
+    paddingVertical: 12,
+    alignItems: 'center',
+    gap: 4,
+  },
+  desktopGridScroll: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+  desktopGridRow: {
+    flexDirection: 'row',
+  },
+  timeGutter: {
+    paddingTop: 0,
+  },
+  timeGutterSlot: {
+    justifyContent: 'flex-start',
+    alignItems: 'flex-end',
+    paddingRight: 10,
+  },
+  timeGutterLabel: {
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: -7,
+  },
+  desktopDayColumnGrid: {
+    // No border radius - connects to header above
+  },
+  desktopHourCell: {
+    position: 'relative',
+  },
+  // Legacy styles (keeping for backwards compatibility)
   gridContainer: {
     paddingHorizontal: 16,
     paddingVertical: 20,
@@ -653,7 +877,15 @@ const styles = StyleSheet.create({
   },
   dayContent: {
     flex: 1,
-    paddingHorizontal: 8,
+  },
+  timeSlotCell: {
+    justifyContent: 'flex-start',
+    paddingHorizontal: 6,
+    paddingTop: 2,
+  },
+  timeSlotLabel: {
+    fontSize: 9,
+    fontWeight: '500',
   },
   emptyDaySmall: {
     flex: 1,

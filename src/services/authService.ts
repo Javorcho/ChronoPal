@@ -113,9 +113,9 @@ export const subscribeToAuthChanges = (
   return data.subscription.unsubscribe;
 };
 
-export const signUpWithEmail = async ({ email, password }: AuthCredentials) => {
+export const signUpWithEmail = async ({ email, password }: AuthCredentials): Promise<{ user?: AuthUser; sessionCreated: boolean }> => {
   if (!isSupabaseConfigured) {
-    return { uid: 'demo-user', email };
+    return { user: { uid: 'demo-user', email }, sessionCreated: true };
   }
 
   const supabase = getSupabaseClient();
@@ -128,7 +128,12 @@ export const signUpWithEmail = async ({ email, password }: AuthCredentials) => {
     throw error;
   }
 
-  return data.user ? { uid: data.user.id, email: data.user.email ?? undefined } : undefined;
+  // If email confirmation is disabled, Supabase creates a session automatically
+  // data.session will be non-null if the user is immediately logged in
+  const sessionCreated = !!data.session;
+  const user = data.user ? { uid: data.user.id, email: data.user.email ?? undefined } : undefined;
+
+  return { user, sessionCreated };
 };
 
 export const signInWithEmail = async ({ email, password }: AuthCredentials) => {
