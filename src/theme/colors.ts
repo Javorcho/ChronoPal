@@ -14,6 +14,7 @@ export const lightColors = {
   primary: '#7f78d2',
   primaryLight: '#a78bfa',
   primaryDark: '#6366f1',
+  secondary: '#06b6d4',
   
   // Accents
   accent: '#fbbf24',
@@ -50,6 +51,7 @@ export const darkColors = {
   primary: '#8b5cf6',
   primaryLight: '#a78bfa',
   primaryDark: '#7c3aed',
+  secondary: '#22d3ee',
   
   // Accents
   accent: '#fbbf24',
