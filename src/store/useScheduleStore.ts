@@ -123,13 +123,17 @@ export const useScheduleStore = create<ScheduleState>()((set, get) => ({
       }
     },
     removeActivity: async (id) => {
-      try {
-        await deleteActivity(id);
+      // Optimistically remove from local state first
+      const previousActivities = get().activities;
       set((state) => ({
         activities: state.activities.filter((activity) => activity.id !== id),
-        }));
+      }));
+      
+      try {
+        await deleteActivity(id);
       } catch (error) {
-        set({ error: (error as Error).message });
+        // Restore previous state on error
+        set({ activities: previousActivities, error: (error as Error).message });
       }
     },
     clearError: () =>

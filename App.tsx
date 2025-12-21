@@ -43,7 +43,7 @@ export default function App() {
 
   return (
     <>
-      <WeeklyGridScreen onSignOut={signOut} />
+      <WeeklyGridScreen onSignOut={signOut} userId={user.id} />
       <StatusBar style={isDark ? 'light' : 'dark'} />
     </>
   );
