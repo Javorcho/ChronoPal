@@ -16,6 +16,7 @@ import {
   dayOrder,
 } from '@/types/schedule';
 import { getMockActivities } from '@/utils/mockActivities';
+import { isSupabaseConfigured } from '@/config/env';
 
 type ScheduleState = {
   userId?: string;
@@ -49,13 +50,13 @@ export const useScheduleStore = create<ScheduleState>()((set, get) => ({
       set({ loading: true, userId: resolvedUserId });
 
       unsubscribe?.();
-      unsubscribe = subscribeToActivities(resolvedUserId, (activities) =>
+      unsubscribe = subscribeToActivities(resolvedUserId, (activities) => {
         set({
           activities,
           hydrated: true,
           loading: false,
-        }),
-      );
+        });
+      });
 
       try {
         const data = await fetchActivities(resolvedUserId);
@@ -95,18 +96,22 @@ export const useScheduleStore = create<ScheduleState>()((set, get) => ({
 
       try {
         const created = await createActivity(payload);
-      set((state) => ({
+        // Always update optimistically for immediate UI feedback
+        // Subscription will sync with server state
+        set((state) => ({
           activities: [...state.activities, created],
         }));
         return created;
       } catch (error) {
-        set({ error: (error as Error).message });
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error('[useScheduleStore] Failed to create activity:', error);
+        set({ error: errorMessage });
         return undefined;
       }
     },
     updateActivity: async (id, updates) => {
-      try {
-        await persistActivity(id, updates);
+      // Optimistically update for immediate UI feedback
+      const previousActivities = get().activities;
       set((state) => ({
         activities: state.activities.map((activity) =>
           activity.id === id
@@ -117,23 +122,33 @@ export const useScheduleStore = create<ScheduleState>()((set, get) => ({
               }
             : activity,
         ),
-        }));
+      }));
+
+      try {
+        await persistActivity(id, updates);
+        // Subscription will sync with server state
       } catch (error) {
-        set({ error: (error as Error).message });
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error('[useScheduleStore] Failed to update activity:', error);
+        // Restore previous state on error
+        set({ activities: previousActivities, error: errorMessage });
       }
     },
     removeActivity: async (id) => {
-      // Optimistically remove from local state first
+      // Optimistically remove for immediate UI feedback
       const previousActivities = get().activities;
       set((state) => ({
         activities: state.activities.filter((activity) => activity.id !== id),
       }));
-      
+
       try {
         await deleteActivity(id);
+        // Subscription will sync with server state
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error('[useScheduleStore] Failed to delete activity:', error);
         // Restore previous state on error
-        set({ activities: previousActivities, error: (error as Error).message });
+        set({ activities: previousActivities, error: errorMessage });
       }
     },
     clearError: () =>

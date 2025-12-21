@@ -589,7 +589,6 @@ export const WeeklyGridScreen = ({ onSignOut, userId }: WeeklyGridScreenProps) =
         onBack={handleBack}
         onSignOut={onSignOut}
         activities={activities.filter(a => a.day === selectedDay)}
-        userId={userId}
       />
     );
   }
@@ -604,7 +603,6 @@ export const WeeklyGridScreen = ({ onSignOut, userId }: WeeklyGridScreenProps) =
         onAddActivity={handleAddActivity}
         activeTab={mobileActiveTab}
         onTabChange={handleTabChange}
-        activities={activities}
         userId={userId}
       />
     );
@@ -629,13 +627,15 @@ type MobileWeekListProps = {
   onAddActivity?: () => void;
   activeTab: 'calendar' | 'add';
   onTabChange: (tab: 'calendar' | 'add') => void;
-  activities: Activity[];
   userId?: string;
 };
 
-const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, activeTab, onTabChange, activities, userId }: MobileWeekListProps) => {
+const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, activeTab, onTabChange, userId }: MobileWeekListProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
+  
+  // Get activities directly from store for reactivity
+  const activities = useScheduleStore((state) => state.activities);
   
   // Modal state
   const [showAddModal, setShowAddModal] = useState(false);
@@ -649,19 +649,24 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, acti
   
   // Handle save activity
   const handleSaveActivity = async (activity: { name: string; day: DayOfWeek; color: string; isRecurring: boolean }) => {
-    await addActivity({
-      ...activity,
-      userId: userId,
-      startTime: '09:00',
-      endTime: '10:00',
-    });
+    if (userId) {
+      await addActivity({
+        ...activity,
+        userId: userId,
+        startTime: '09:00',
+        endTime: '10:00',
+      });
+      setShowAddModal(false);
+    }
   };
   
   // Handle delete activity
   const handleDeleteActivity = async (id: string) => {
-    console.log('Deleting activity:', id);
-    await removeActivity(id);
-    console.log('Activity deleted');
+    try {
+      await removeActivity(id);
+    } catch (error) {
+      console.error('Failed to delete activity:', error);
+    }
   };
   
   // Handle edit activity
@@ -899,7 +904,7 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, acti
                   >
                     <View style={[styles.activityColorBar, { backgroundColor: activity.color }]} />
                     <Pressable 
-                      style={styles.activityInfo}
+                      style={[styles.activityInfo, { flex: 1 }]}
                       onPress={() => handleEditActivity(activity)}
                     >
                       <Text style={[styles.activityName, { color: colors.textPrimary }]}>
@@ -922,6 +927,7 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, acti
                     <Pressable 
                       style={styles.activityDeleteButton}
                       onPress={() => handleDeleteActivity(activity.id)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     >
                       <Ionicons name="trash-outline" size={18} color={colors.error || '#EF4444'} />
                     </Pressable>
@@ -967,16 +973,10 @@ type MobileDayExpandedProps = {
   onBack: () => void;
   onSignOut?: () => void;
   activities: Activity[];
-  userId?: string;
 };
 
-const MobileDayExpanded = ({ day, isToday, onBack, activities, userId }: MobileDayExpandedProps) => {
+const MobileDayExpanded = ({ day, isToday, onBack, activities }: MobileDayExpandedProps) => {
   const { colors } = useTheme();
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [editingActivity, setEditingActivity] = useState<Activity | null>(null);
-  
-  const updateActivity = useScheduleStore((state) => state.updateActivity);
-  const removeActivity = useScheduleStore((state) => state.removeActivity);
 
   const FULL_DAY_NAMES: Record<DayOfWeek, string> = {
     [DayOfWeek.Monday]: 'Monday',
@@ -988,24 +988,6 @@ const MobileDayExpanded = ({ day, isToday, onBack, activities, userId }: MobileD
     [DayOfWeek.Sunday]: 'Sunday',
   };
   
-  const handleEditActivity = (activity: Activity) => {
-    setEditingActivity(activity);
-    setShowEditModal(true);
-  };
-  
-  const handleSaveEdit = async (updatedData: { name: string; day: DayOfWeek; color: string; isRecurring: boolean }) => {
-    if (editingActivity) {
-      await updateActivity(editingActivity.id, updatedData);
-      setEditingActivity(null);
-      setShowEditModal(false);
-    }
-  };
-  
-  const handleDeleteActivity = async (id: string) => {
-    console.log('Deleting activity from day view:', id);
-    await removeActivity(id);
-    console.log('Activity deleted from day view');
-  };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -1056,10 +1038,7 @@ const MobileDayExpanded = ({ day, isToday, onBack, activities, userId }: MobileD
               style={[styles.dayActivityItem, { backgroundColor: colors.card }]}
             >
               <View style={[styles.dayActivityColorBar, { backgroundColor: activity.color }]} />
-              <Pressable 
-                style={styles.dayActivityInfo}
-                onPress={() => handleEditActivity(activity)}
-              >
+              <View style={styles.dayActivityInfo}>
                 <Text style={[styles.dayActivityName, { color: colors.textPrimary }]}>
                   {activity.name}
                 </Text>
@@ -1074,31 +1053,11 @@ const MobileDayExpanded = ({ day, isToday, onBack, activities, userId }: MobileD
                     </View>
                   )}
                 </View>
-              </Pressable>
-              <Pressable
-                style={styles.dayActivityDeleteButton}
-                onPress={() => handleDeleteActivity(activity.id)}
-              >
-                <Ionicons name="trash-outline" size={18} color={colors.error || '#EF4444'} />
-              </Pressable>
+              </View>
             </View>
           ))
         )}
       </ScrollView>
-
-      {/* Edit Activity Modal */}
-      {editingActivity && (
-        <EditActivityModal
-          visible={showEditModal}
-          onClose={() => {
-            setShowEditModal(false);
-            setEditingActivity(null);
-          }}
-          onSave={handleSaveEdit}
-          colors={colors}
-          activity={editingActivity}
-        />
-      )}
     </View>
   );
 };
