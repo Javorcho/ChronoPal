@@ -32,22 +32,15 @@ export const subscribeToActivities = (
         filter: `user_id=eq.${userId}`,
       },
       async () => {
-        try {
-          const latest = await fetchActivities(userId);
-          callback(latest);
-        } catch (error) {
-          console.error('[subscribeToActivities] Error fetching after change:', error);
-        }
+        const latest = await fetchActivities(userId);
+        callback(latest);
       },
     )
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        fetchActivities(userId)
-          .then(callback)
-          .catch((error) => {
-            console.error('[subscribeToActivities] Error on initial fetch:', error);
-            callback(getMockActivities(userId));
-          });
+        fetchActivities(userId).then(callback).catch(() => {
+          callback(getMockActivities(userId));
+        });
       }
     });
 
@@ -102,16 +95,6 @@ export const createActivity = async (
   }
 
   const supabase = getSupabaseClient();
-  
-  // Verify user session
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) {
-    throw new Error('User not authenticated');
-  }
-  if (user.id !== input.userId) {
-    console.warn('[createActivity] User ID mismatch:', { sessionUserId: user.id, inputUserId: input.userId });
-  }
-
   const payload = {
     user_id: input.userId,
     name: input.name,
@@ -119,20 +102,15 @@ export const createActivity = async (
     day: input.day,
     start_time: input.startTime,
     end_time: input.endTime,
-    is_recurring: input.isRecurring ?? false,
-    recurrence: input.recurrence ?? null,
-    notes: input.notes ?? null,
+    is_recurring: input.isRecurring,
+    recurrence: input.recurrence,
+    notes: input.notes,
   };
 
-  console.log('[createActivity] Inserting payload:', payload);
   const { data, error } = await supabase.from(COLLECTION).insert(payload).select().single();
   if (error) {
-    console.error('[createActivity] Database error:', error);
-    console.error('[createActivity] Error details:', JSON.stringify(error, null, 2));
     throw error;
   }
-  
-  console.log('[createActivity] Successfully created:', data);
 
   return {
     id: data.id,
@@ -159,43 +137,23 @@ export const updateActivity = async (
   }
 
   const supabase = getSupabaseClient();
-  
-  // Verify user session
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) {
-    throw new Error('User not authenticated');
-  }
-
   const payload: Record<string, any> = {
+    ...updates,
     updated_at: new Date().toISOString(),
   };
 
-  // Map camelCase fields to snake_case database fields
-  if (updates.name !== undefined) payload.name = updates.name;
-  if (updates.color !== undefined) payload.color = updates.color;
-  if (updates.day !== undefined) payload.day = updates.day;
-  if (updates.startTime !== undefined) payload.start_time = updates.startTime;
-  if (updates.endTime !== undefined) payload.end_time = updates.endTime;
+  if (updates.startTime) payload.start_time = updates.startTime;
+  if (updates.endTime) payload.end_time = updates.endTime;
   if (updates.isRecurring !== undefined) payload.is_recurring = updates.isRecurring;
-  if (updates.recurrence !== undefined) payload.recurrence = updates.recurrence;
-  if (updates.notes !== undefined) payload.notes = updates.notes;
 
-  console.log('[updateActivity] Updating activity:', id, 'with payload:', payload);
-  const { data, error } = await supabase
-    .from(COLLECTION)
-    .update(payload)
-    .eq('id', id)
-    .select()
-    .single();
+  delete payload.startTime;
+  delete payload.endTime;
+  delete payload.isRecurring;
 
+  const { error } = await supabase.from(COLLECTION).update(payload).eq('id', id);
   if (error) {
-    console.error('[updateActivity] Database error:', error);
-    console.error('[updateActivity] Error details:', JSON.stringify(error, null, 2));
     throw error;
   }
-
-  console.log('[updateActivity] Successfully updated:', data);
-  return data;
 };
 
 export const removeActivity = async (id: ActivityId) => {
@@ -204,21 +162,9 @@ export const removeActivity = async (id: ActivityId) => {
   }
 
   const supabase = getSupabaseClient();
-  
-  // Verify user session
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) {
-    throw new Error('User not authenticated');
-  }
-
-  console.log('[removeActivity] Deleting activity:', id);
   const { error } = await supabase.from(COLLECTION).delete().eq('id', id);
   if (error) {
-    console.error('[removeActivity] Database error:', error);
-    console.error('[removeActivity] Error details:', JSON.stringify(error, null, 2));
     throw error;
   }
-  
-  console.log('[removeActivity] Successfully deleted:', id);
 };
 
