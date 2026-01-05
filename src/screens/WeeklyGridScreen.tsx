@@ -759,6 +759,9 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
   
   // Edit activity modal state
   const [editingActivity, setEditingActivity] = useState<Activity | null>(null);
+  
+  // Desktop activities panel state
+  const [showActivitiesPanel, setShowActivitiesPanel] = useState(false);
 
   // Subscribe to activities from Supabase
   useEffect(() => {
@@ -971,6 +974,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           activities={activities}
           activeTab={mobileActiveTab}
           onTabChange={handleTabChange}
+          onActivityClick={handleActivityClick}
         />
         <AddActivityModal
           visible={showAddActivity}
@@ -999,6 +1003,8 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
         onAddActivity={handleAddActivity}
         activities={activities}
         onActivityClick={handleActivityClick}
+        showActivitiesPanel={showActivitiesPanel}
+        onToggleActivitiesPanel={() => setShowActivitiesPanel(!showActivitiesPanel)}
       />
       <AddActivityModal
         visible={showAddActivity}
@@ -1029,9 +1035,10 @@ type MobileWeekListProps = {
   activities: Activity[];
   activeTab: 'calendar' | 'add';
   onTabChange: (tab: 'calendar' | 'add') => void;
+  onActivityClick?: (activity: Activity) => void;
 };
 
-const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, activeTab, onTabChange, activities }: MobileWeekListProps) => {
+const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, activeTab, onTabChange, activities, onActivityClick }: MobileWeekListProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
   
@@ -1240,25 +1247,63 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, acti
             { transform: [{ translateX: addTranslateX }] }
           ]}
         >
-          <View style={[styles.addActivityView, { backgroundColor: colors.card }]}>
-            <View style={styles.addActivityContent}>
-              <View style={[styles.addActivityIconCircle, { backgroundColor: colors.primary + '15' }]}>
-                <Ionicons name="add-circle-outline" size={64} color={colors.primary} />
-              </View>
-              <Text style={[styles.addActivityTitle, { color: colors.textPrimary }]}>
-                Add Activity
-              </Text>
-              <Text style={[styles.addActivitySubtitle, { color: colors.textSecondary }]}>
-                Create a new activity or event for your schedule
-              </Text>
-              <Pressable 
-                style={[styles.addActivityButton, { backgroundColor: colors.primary }]}
-                onPress={onAddActivity}
-              >
-                <Ionicons name="add" size={20} color="#ffffff" />
-                <Text style={styles.addActivityButtonText}>New Activity</Text>
-              </Pressable>
-            </View>
+          <View style={[styles.addActivityView, { backgroundColor: colors.background }]}>
+            {/* New Activity Button at Top */}
+            <Pressable 
+              style={[styles.newActivityButtonTop, { backgroundColor: colors.primary }]}
+              onPress={onAddActivity}
+            >
+              <Ionicons name="add-circle" size={22} color="#ffffff" />
+              <Text style={styles.newActivityButtonTopText}>New Activity</Text>
+            </Pressable>
+
+            {/* Activities List */}
+            <ScrollView 
+              style={styles.activitiesListScroll}
+              contentContainerStyle={styles.activitiesListContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {activities.length === 0 ? (
+                <View style={styles.emptyActivitiesList}>
+                  <Ionicons name="calendar-outline" size={48} color={colors.placeholder} />
+                  <Text style={[styles.emptyActivitiesTitle, { color: colors.textSecondary }]}>
+                    No activities yet
+                  </Text>
+                  <Text style={[styles.emptyActivitiesSubtitle, { color: colors.placeholder }]}>
+                    Tap the button above to create one
+                  </Text>
+                </View>
+              ) : (
+                activities.map((activity) => (
+                  <Pressable
+                    key={activity.id}
+                    style={[styles.activityListItem, { backgroundColor: colors.card }]}
+                    onPress={() => onActivityClick?.(activity)}
+                  >
+                    <View style={[styles.activityListColorBar, { backgroundColor: activity.color }]} />
+                    <View style={styles.activityListInfo}>
+                      <Text style={[styles.activityListName, { color: colors.textPrimary }]}>
+                        {activity.name}
+                      </Text>
+                      <View style={styles.activityListMeta}>
+                        <Text style={[styles.activityListDay, { color: colors.textSecondary }]}>
+                          {dayNames[activity.day]}
+                        </Text>
+                        <Text style={[styles.activityListTime, { color: colors.placeholder }]}>
+                          {activity.startTime} - {activity.endTime}
+                        </Text>
+                        {activity.isRecurring && (
+                          <View style={styles.activityListRecurring}>
+                            <Ionicons name="repeat" size={12} color={colors.primary} />
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={colors.placeholder} />
+                  </Pressable>
+                ))
+              )}
+            </ScrollView>
           </View>
         </Animated.View>
       </View>
@@ -1396,6 +1441,8 @@ type DesktopWeekGridProps = {
   onAddActivity?: () => void;
   activities: Activity[];
   onActivityClick?: (activity: Activity) => void;
+  showActivitiesPanel: boolean;
+  onToggleActivitiesPanel: () => void;
 };
 
 // Generate time slots from 12am to 11pm (full 24 hours)
@@ -1408,14 +1455,15 @@ const TIME_SLOTS = Array.from({ length: 24 }, (_, i) => {
 
 const HOUR_HEIGHT = 50; // Height of each hour slot in pixels
 
-const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onActivityClick }: DesktopWeekGridProps) => {
+const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onActivityClick, showActivitiesPanel, onToggleActivitiesPanel }: DesktopWeekGridProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
   const scrollRef = useWeeklyGridScrollbar();
   const TIME_GUTTER_WIDTH = 56;
   const GAP = 8;
   const PADDING = 16;
-  const DAY_COLUMN_WIDTH = Math.max((screenWidth - TIME_GUTTER_WIDTH - PADDING * 2 - GAP * 6) / 7, 100);
+  const PANEL_WIDTH = showActivitiesPanel ? 320 : 0;
+  const DAY_COLUMN_WIDTH = Math.max((screenWidth - TIME_GUTTER_WIDTH - PADDING * 2 - GAP * 6 - PANEL_WIDTH) / 7, 100);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -1428,6 +1476,27 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onA
             </Text>
           </View>
           <View style={styles.headerActions}>
+            <Pressable
+              style={[
+                styles.myActivitiesButton, 
+                { 
+                  backgroundColor: showActivitiesPanel ? colors.primary : colors.inputBackground,
+                }
+              ]}
+              onPress={onToggleActivitiesPanel}
+            >
+              <Ionicons 
+                name="list" 
+                size={18} 
+                color={showActivitiesPanel ? '#ffffff' : colors.textSecondary} 
+              />
+              <Text style={[
+                styles.myActivitiesButtonText, 
+                { color: showActivitiesPanel ? '#ffffff' : colors.textSecondary }
+              ]}>
+                My Activities
+              </Text>
+            </Pressable>
             {onAddActivity && (
               <Pressable
                 style={[styles.addActivityDesktopButton, { backgroundColor: colors.primary }]}
@@ -1634,6 +1703,60 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onA
           </View>
         );
       })()}
+
+      {/* Activities Panel */}
+      {showActivitiesPanel && (
+        <View style={[styles.activitiesPanel, { backgroundColor: colors.card, borderLeftColor: colors.border }]}>
+          <View style={styles.activitiesPanelHeader}>
+            <Text style={[styles.activitiesPanelTitle, { color: colors.textPrimary }]}>
+              My Activities
+            </Text>
+            <Text style={[styles.activitiesPanelCount, { color: colors.textSecondary }]}>
+              {activities.length} {activities.length === 1 ? 'activity' : 'activities'}
+            </Text>
+          </View>
+          
+          <ScrollView 
+            style={styles.activitiesPanelScroll}
+            showsVerticalScrollIndicator={false}
+          >
+            {activities.length === 0 ? (
+              <View style={styles.activitiesPanelEmpty}>
+                <Ionicons name="calendar-outline" size={40} color={colors.placeholder} />
+                <Text style={[styles.activitiesPanelEmptyText, { color: colors.textSecondary }]}>
+                  No activities yet
+                </Text>
+              </View>
+            ) : (
+              activities.map((activity) => (
+                <Pressable
+                  key={activity.id}
+                  style={[styles.activitiesPanelItem, { backgroundColor: colors.inputBackground }]}
+                  onPress={() => onActivityClick?.(activity)}
+                >
+                  <View style={[styles.activitiesPanelItemColor, { backgroundColor: activity.color }]} />
+                  <View style={styles.activitiesPanelItemInfo}>
+                    <Text style={[styles.activitiesPanelItemName, { color: colors.textPrimary }]} numberOfLines={1}>
+                      {activity.name}
+                    </Text>
+                    <View style={styles.activitiesPanelItemMeta}>
+                      <Text style={[styles.activitiesPanelItemDay, { color: colors.textSecondary }]}>
+                        {dayNames[activity.day]}
+                      </Text>
+                      <Text style={[styles.activitiesPanelItemTime, { color: colors.placeholder }]}>
+                        {activity.startTime} - {activity.endTime}
+                      </Text>
+                      {activity.isRecurring && (
+                        <Ionicons name="repeat" size={12} color={colors.primary} style={{ marginLeft: 4 }} />
+                      )}
+                    </View>
+                  </View>
+                </Pressable>
+              ))
+            )}
+          </ScrollView>
+        </View>
+      )}
     </View>
   );
 };
@@ -1708,6 +1831,90 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '600',
+  },
+  myActivitiesButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  myActivitiesButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  // Activities Panel (Desktop)
+  activitiesPanel: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: 320,
+    borderLeftWidth: 1,
+    paddingTop: Platform.OS === 'ios' ? 60 : Platform.OS === 'android' ? 40 : 20,
+  },
+  activitiesPanelHeader: {
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
+  },
+  activitiesPanelTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  activitiesPanelCount: {
+    fontSize: 13,
+  },
+  activitiesPanelScroll: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+  activitiesPanelEmpty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    gap: 12,
+  },
+  activitiesPanelEmptyText: {
+    fontSize: 14,
+  },
+  activitiesPanelItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 10,
+    marginBottom: 8,
+    overflow: 'hidden',
+  },
+  activitiesPanelItemColor: {
+    width: 4,
+    height: '100%',
+    minHeight: 54,
+  },
+  activitiesPanelItemInfo: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  activitiesPanelItemName: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  activitiesPanelItemMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  activitiesPanelItemDay: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  activitiesPanelItemTime: {
+    fontSize: 11,
   },
   backButton: {
     width: 40,
@@ -1906,9 +2113,80 @@ const styles = StyleSheet.create({
   // Add Activity View
   addActivityView: {
     flex: 1,
-    margin: 16,
-    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  newActivityButtonTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 14,
+    marginBottom: 16,
+  },
+  newActivityButtonTopText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  activitiesListScroll: {
+    flex: 1,
+  },
+  activitiesListContent: {
+    paddingBottom: 20,
+  },
+  emptyActivitiesList: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    gap: 12,
+  },
+  emptyActivitiesTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  emptyActivitiesSubtitle: {
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  activityListItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 12,
+    marginBottom: 10,
     overflow: 'hidden',
+  },
+  activityListColorBar: {
+    width: 4,
+    height: '100%',
+    minHeight: 60,
+  },
+  activityListInfo: {
+    flex: 1,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+  },
+  activityListName: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  activityListMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  activityListDay: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  activityListTime: {
+    fontSize: 12,
+  },
+  activityListRecurring: {
+    marginLeft: 4,
   },
   addActivityContent: {
     flex: 1,
