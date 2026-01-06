@@ -150,6 +150,178 @@ const CloseButton = ({ onPress, colors, style }: CloseButtonProps) => {
   );
 };
 
+// Activity panel item with hover effect
+type ActivityPanelItemProps = {
+  activity: Activity;
+  onPress: () => void;
+  colors: any;
+};
+
+const ActivityPanelItem = ({ activity, onPress, colors }: ActivityPanelItemProps) => {
+  const [isHovered, setIsHovered] = useState(false);
+  
+  return (
+    <Pressable
+      style={[
+        styles.activitiesPanelItem, 
+        { 
+          backgroundColor: isHovered ? activity.color + '20' : colors.inputBackground,
+          transform: isHovered ? [{ scale: 1.02 }] : [{ scale: 1 }],
+        }
+      ]}
+      onPress={onPress}
+      onHoverIn={() => setIsHovered(true)}
+      onHoverOut={() => setIsHovered(false)}
+    >
+      <View style={[
+        styles.activitiesPanelItemColor, 
+        { 
+          backgroundColor: activity.color,
+          width: isHovered ? 6 : 4,
+        }
+      ]} />
+      <View style={styles.activitiesPanelItemInfo}>
+        <Text 
+          style={[
+            styles.activitiesPanelItemName, 
+            { color: isHovered ? activity.color : colors.textPrimary }
+          ]} 
+          numberOfLines={1}
+        >
+          {activity.name}
+        </Text>
+        <View style={styles.activitiesPanelItemMeta}>
+          <Text style={[styles.activitiesPanelItemDay, { color: colors.textSecondary }]}>
+            {dayNames[activity.day]}
+          </Text>
+          <Text style={[styles.activitiesPanelItemTime, { color: colors.placeholder }]}>
+            {activity.startTime} - {activity.endTime}
+          </Text>
+          {activity.isRecurring && (
+            <Ionicons name="repeat" size={12} color={colors.primary} style={{ marginLeft: 4 }} />
+          )}
+        </View>
+      </View>
+      {isHovered && (
+        <Ionicons name="chevron-forward" size={16} color={activity.color} style={{ marginRight: 12 }} />
+      )}
+    </Pressable>
+  );
+};
+
+// Import Calendar button with hover effect
+type ImportCalendarButtonProps = {
+  onPress: () => void;
+  isImporting: boolean;
+  colors: any;
+};
+
+const ImportCalendarButton = ({ onPress, isImporting, colors }: ImportCalendarButtonProps) => {
+  const [isHovered, setIsHovered] = useState(false);
+  
+  return (
+    <Pressable
+      style={[
+        styles.importCalendarButton, 
+        { 
+          backgroundColor: isHovered ? colors.primary + '20' : colors.inputBackground,
+          opacity: isImporting ? 0.6 : 1,
+          borderWidth: isHovered ? 1 : 0,
+          borderColor: colors.primary,
+        }
+      ]}
+      onPress={onPress}
+      onHoverIn={() => setIsHovered(true)}
+      onHoverOut={() => setIsHovered(false)}
+      disabled={isImporting}
+    >
+      {isImporting ? (
+        <Ionicons name="sync" size={18} color={isHovered ? colors.primary : colors.textSecondary} />
+      ) : (
+        <Ionicons name="calendar" size={18} color={isHovered ? colors.primary : colors.textSecondary} />
+      )}
+      <Text style={[
+        styles.importCalendarButtonText, 
+        { color: isHovered ? colors.primary : colors.textSecondary }
+      ]}>
+        {isImporting ? 'Importing...' : 'Import Calendar'}
+      </Text>
+    </Pressable>
+  );
+};
+
+// My Activities button with hover effect
+type MyActivitiesButtonProps = {
+  onPress: () => void;
+  isActive: boolean;
+  colors: any;
+};
+
+const MyActivitiesButton = ({ onPress, isActive, colors }: MyActivitiesButtonProps) => {
+  const [isHovered, setIsHovered] = useState(false);
+  
+  const getBackgroundColor = () => {
+    if (isActive) return colors.primary;
+    if (isHovered) return colors.primary + '20';
+    return colors.inputBackground;
+  };
+  
+  const getTextColor = () => {
+    if (isActive) return '#ffffff';
+    if (isHovered) return colors.primary;
+    return colors.textSecondary;
+  };
+  
+  return (
+    <Pressable
+      style={[
+        styles.myActivitiesButton, 
+        { 
+          backgroundColor: getBackgroundColor(),
+          borderWidth: isHovered && !isActive ? 1 : 0,
+          borderColor: colors.primary,
+        }
+      ]}
+      onPress={onPress}
+      onHoverIn={() => setIsHovered(true)}
+      onHoverOut={() => setIsHovered(false)}
+    >
+      <Ionicons name="list" size={18} color={getTextColor()} />
+      <Text style={[styles.myActivitiesButtonText, { color: getTextColor() }]}>
+        My Activities
+      </Text>
+    </Pressable>
+  );
+};
+
+// Add Activity button with hover effect
+type AddActivityButtonProps = {
+  onPress: () => void;
+  colors: any;
+};
+
+const AddActivityButton = ({ onPress, colors }: AddActivityButtonProps) => {
+  const [isHovered, setIsHovered] = useState(false);
+  
+  return (
+    <Pressable
+      style={[
+        styles.addActivityDesktopButton, 
+        { 
+          backgroundColor: isHovered ? colors.primaryHover || '#7C3AED' : colors.primary,
+          transform: isHovered ? [{ scale: 1.03 }] : [{ scale: 1 }],
+        }
+      ]}
+      onPress={onPress}
+      onHoverIn={() => setIsHovered(true)}
+      onHoverOut={() => setIsHovered(false)}
+    >
+      <Ionicons name="add" size={18} color="#ffffff" />
+      <Text style={styles.addActivityDesktopButtonText}>Add Activity</Text>
+    </Pressable>
+  );
+};
+
 // Get current week's date range (Monday to Sunday)
 const getWeekDateRange = () => {
   const today = new Date();
@@ -962,7 +1134,8 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
   const handleDeleteActivity = async (activityId: string): Promise<void> => {
     try {
       await removeActivity(activityId);
-      // Activities will update automatically via subscription
+      // Immediately update local state (don't wait for subscription)
+      setActivities(prev => prev.filter(a => a.id !== activityId));
     } catch (error) {
       console.error('Failed to delete activity:', error);
     }
@@ -1702,57 +1875,21 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onA
             
             {/* Import from Google Calendar button */}
             {onImportGoogleCalendar && (
-              <Pressable
-                style={[
-                  styles.importCalendarButton, 
-                  { 
-                    backgroundColor: colors.inputBackground,
-                    opacity: isImporting ? 0.6 : 1,
-                  }
-                ]}
+              <ImportCalendarButton
                 onPress={onImportGoogleCalendar}
-                disabled={isImporting}
-              >
-                {isImporting ? (
-                  <Ionicons name="sync" size={18} color={colors.textSecondary} />
-                ) : (
-                  <Ionicons name="calendar" size={18} color={colors.textSecondary} />
-                )}
-                <Text style={[styles.importCalendarButtonText, { color: colors.textSecondary }]}>
-                  {isImporting ? 'Importing...' : 'Import Calendar'}
-                </Text>
-              </Pressable>
+                isImporting={isImporting || false}
+                colors={colors}
+              />
             )}
             
-            <Pressable
-              style={[
-                styles.myActivitiesButton, 
-                { 
-                  backgroundColor: showActivitiesPanel ? colors.primary : colors.inputBackground,
-                }
-              ]}
+            <MyActivitiesButton
               onPress={onToggleActivitiesPanel}
-            >
-              <Ionicons 
-                name="list" 
-                size={18} 
-                color={showActivitiesPanel ? '#ffffff' : colors.textSecondary} 
-              />
-              <Text style={[
-                styles.myActivitiesButtonText, 
-                { color: showActivitiesPanel ? '#ffffff' : colors.textSecondary }
-              ]}>
-                My Activities
-              </Text>
-            </Pressable>
+              isActive={showActivitiesPanel}
+              colors={colors}
+            />
+            
             {onAddActivity && (
-              <Pressable
-                style={[styles.addActivityDesktopButton, { backgroundColor: colors.primary }]}
-                onPress={onAddActivity}
-              >
-                <Ionicons name="add" size={18} color="#ffffff" />
-                <Text style={styles.addActivityDesktopButtonText}>Add Activity</Text>
-              </Pressable>
+              <AddActivityButton onPress={onAddActivity} colors={colors} />
             )}
             {onSignOut && (
               <LogoutButton onPress={onSignOut} isMobile={false} colors={colors} />
@@ -1980,29 +2117,12 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onA
               </View>
             ) : (
               activities.map((activity) => (
-                <Pressable
+                <ActivityPanelItem
                   key={activity.id}
-                  style={[styles.activitiesPanelItem, { backgroundColor: colors.inputBackground }]}
+                  activity={activity}
                   onPress={() => onActivityClick?.(activity)}
-                >
-                  <View style={[styles.activitiesPanelItemColor, { backgroundColor: activity.color }]} />
-                  <View style={styles.activitiesPanelItemInfo}>
-                    <Text style={[styles.activitiesPanelItemName, { color: colors.textPrimary }]} numberOfLines={1}>
-                      {activity.name}
-                    </Text>
-                    <View style={styles.activitiesPanelItemMeta}>
-                      <Text style={[styles.activitiesPanelItemDay, { color: colors.textSecondary }]}>
-                        {dayNames[activity.day]}
-                      </Text>
-                      <Text style={[styles.activitiesPanelItemTime, { color: colors.placeholder }]}>
-                        {activity.startTime} - {activity.endTime}
-                      </Text>
-                      {activity.isRecurring && (
-                        <Ionicons name="repeat" size={12} color={colors.primary} style={{ marginLeft: 4 }} />
-                      )}
-                    </View>
-                  </View>
-                </Pressable>
+                  colors={colors}
+                />
               ))
             )}
           </ScrollView>

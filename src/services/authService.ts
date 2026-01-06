@@ -76,11 +76,15 @@ const getRedirectUri = () => {
     // On web, use the current origin so Supabase can detect the hash tokens
     return window.location.origin;
   }
-  // On native, use deep link
-  return makeRedirectUri({
+  // On native (Expo Go or standalone), use the appropriate redirect URI
+  // For Expo Go: exp://192.168.x.x:8081/--/auth/callback
+  // For standalone: chronopal://auth/callback
+  const redirectUri = makeRedirectUri({
     scheme: 'chronopal',
     path: 'auth/callback',
   });
+  console.log('OAuth Redirect URI:', redirectUri);
+  return redirectUri;
 };
 
 export const subscribeToAuthChanges = (
@@ -198,6 +202,89 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
     apple: 'email name',
   };
 
+  // On native, we need to handle OAuth differently
+  if (Platform.OS !== 'web') {
+    // For mobile, we need to use skipBrowserRedirect to get the URL
+    // and handle the redirect ourselves
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: supabaseProvider,
+      options: {
+        redirectTo: redirectUri,
+        scopes: scopes[provider],
+        skipBrowserRedirect: true, // Important: don't auto-redirect
+        queryParams: provider === 'google' ? {
+          access_type: 'offline',
+          prompt: 'consent',
+        } : undefined,
+      },
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data.url) {
+      throw new Error('No OAuth URL returned');
+    }
+
+    console.log('Opening OAuth URL:', data.url);
+    console.log('Expected redirect to:', redirectUri);
+
+    // Open the browser and wait for redirect
+    const result = await WebBrowser.openAuthSessionAsync(
+      data.url,
+      redirectUri,
+    );
+
+    console.log('OAuth result type:', result.type);
+
+    if (result.type === 'success' && result.url) {
+      console.log('OAuth success URL:', result.url);
+      
+      // Parse the URL to get tokens - check both hash and query params
+      const url = result.url;
+      let params: URLSearchParams;
+      
+      if (url.includes('#')) {
+        params = new URLSearchParams(url.split('#')[1]);
+      } else if (url.includes('?')) {
+        params = new URLSearchParams(url.split('?')[1]);
+      } else {
+        throw new Error('No auth params in callback URL');
+      }
+
+      const accessToken = params.get('access_token');
+      const refreshToken = params.get('refresh_token');
+
+      if (accessToken && refreshToken) {
+        const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+
+        if (sessionError) {
+          throw sessionError;
+        }
+
+        return toAuthUser(sessionData.user, accessToken);
+      } else {
+        // Check for error in params
+        const errorMsg = params.get('error_description') || params.get('error');
+        if (errorMsg) {
+          throw new Error(errorMsg);
+        }
+        throw new Error('No tokens in callback URL');
+      }
+    } else if (result.type === 'cancel') {
+      throw new Error('Authentication was cancelled');
+    } else if (result.type === 'dismiss') {
+      throw new Error('Authentication was dismissed');
+    }
+
+    return undefined;
+  }
+
+  // Web OAuth flow
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: supabaseProvider,
     options: {
@@ -212,41 +299,6 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
 
   if (error) {
     throw error;
-  }
-
-  // On native, we need to open the URL in a browser
-  if (Platform.OS !== 'web' && data.url) {
-    const result = await WebBrowser.openAuthSessionAsync(
-      data.url,
-      redirectUri,
-    );
-
-    if (result.type === 'success') {
-      // Extract the URL and let Supabase handle the session
-      const url = result.url;
-      
-      // Parse the URL to get tokens
-      if (url) {
-        const params = new URLSearchParams(url.split('#')[1] || url.split('?')[1] || '');
-        const accessToken = params.get('access_token');
-        const refreshToken = params.get('refresh_token');
-
-        if (accessToken && refreshToken) {
-          const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken,
-          });
-
-          if (sessionError) {
-            throw sessionError;
-          }
-
-          return toAuthUser(sessionData.user, accessToken);
-        }
-      }
-    } else if (result.type === 'cancel') {
-      throw new Error('Authentication was cancelled');
-    }
   }
 
   return undefined;
