@@ -160,7 +160,23 @@ export const signOutUser = async () => {
   }
 
   const supabase = getSupabaseClient();
-  await supabase.auth.signOut();
+  
+  try {
+    // Try to sign out from the server
+    await supabase.auth.signOut();
+  } catch (error) {
+    // If server signout fails (403, etc.), still clear local session
+    console.warn('Server signout failed, clearing local session:', error);
+  }
+  
+  // Clear any stored tokens in localStorage (web)
+  if (typeof window !== 'undefined' && window.localStorage) {
+    // Clear all Supabase auth keys
+    const keysToRemove = Object.keys(window.localStorage).filter(
+      key => key.startsWith('sb-') || key.includes('supabase')
+    );
+    keysToRemove.forEach(key => window.localStorage.removeItem(key));
+  }
 };
 
 // OAuth Sign-In with Google, Microsoft (Azure), or Apple

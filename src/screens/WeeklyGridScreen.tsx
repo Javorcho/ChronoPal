@@ -19,6 +19,8 @@ import { useTheme } from '@/store/useThemeStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { Activity, dayNames, DayOfWeek, dayOrder } from '@/types/schedule';
 import { subscribeToActivities, createActivity, updateActivity, removeActivity } from '@/services/activityService';
+import { fetchGoogleCalendarEvents } from '@/services/calendarService';
+import { getSessionWithToken } from '@/services/authService';
 
 // Activity colors palette
 const ACTIVITY_COLORS = [
@@ -114,6 +116,36 @@ const LogoutButton = ({ onPress, isMobile, colors }: LogoutButtonProps) => {
       onHoverOut={() => setIsHovered(false)}
     >
       <Ionicons name="log-out-outline" size={20} color={getIconColor()} />
+    </Pressable>
+  );
+};
+
+// Close button with hover effect (red on hover)
+type CloseButtonProps = {
+  onPress: () => void;
+  colors: any;
+  style?: any;
+};
+
+const CloseButton = ({ onPress, colors, style }: CloseButtonProps) => {
+  const [isHovered, setIsHovered] = useState(false);
+  
+  return (
+    <Pressable
+      style={[
+        styles.activitiesPanelClose, 
+        { backgroundColor: isHovered ? '#FEE2E2' : colors.inputBackground },
+        style
+      ]}
+      onPress={onPress}
+      onHoverIn={() => setIsHovered(true)}
+      onHoverOut={() => setIsHovered(false)}
+    >
+      <Ionicons 
+        name="close" 
+        size={18} 
+        color={isHovered ? '#EF4444' : colors.textSecondary} 
+      />
     </Pressable>
   );
 };
@@ -762,6 +794,11 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
   
   // Desktop activities panel state
   const [showActivitiesPanel, setShowActivitiesPanel] = useState(false);
+  
+  // Google Calendar import state
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSuccess, setImportSuccess] = useState<number | null>(null);
 
   // Subscribe to activities from Supabase
   useEffect(() => {
@@ -932,6 +969,118 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
     setEditingActivity(null);
   };
 
+  // Import events from Google Calendar
+  const handleImportGoogleCalendar = async () => {
+    if (!user?.uid) {
+      setImportError('Please sign in first');
+      return;
+    }
+
+    setIsImporting(true);
+    setImportError(null);
+    setImportSuccess(null);
+
+    try {
+      // Get the session with provider token
+      const session = await getSessionWithToken();
+      
+      if (!session?.providerToken) {
+        setImportError('Please sign in with Google to import calendar events');
+        setIsImporting(false);
+        return;
+      }
+
+      // Get current week's start and end dates
+      const today = new Date();
+      const dayOfWeek = today.getDay();
+      const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+      
+      const weekStart = new Date(today);
+      weekStart.setDate(today.getDate() + mondayOffset);
+      weekStart.setHours(0, 0, 0, 0);
+      
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 7);
+      weekEnd.setHours(23, 59, 59, 999);
+
+      // Fetch events from Google Calendar
+      const googleEvents = await fetchGoogleCalendarEvents(
+        session.providerToken,
+        'primary',
+        weekStart,
+        weekEnd
+      );
+
+      if (googleEvents.length === 0) {
+        setImportSuccess(0);
+        setIsImporting(false);
+        return;
+      }
+
+      // Convert and import events
+      let importedCount = 0;
+      
+      for (const event of googleEvents) {
+        // Skip all-day events for now (they don't have specific times)
+        if (event.isAllDay) continue;
+        
+        // Parse the event times
+        const startDate = new Date(event.startTime);
+        const endDate = new Date(event.endTime);
+        
+        // Get the day of week
+        const eventDayIndex = startDate.getDay();
+        const dayIndex = eventDayIndex === 0 ? 6 : eventDayIndex - 1;
+        const day = dayOrder[dayIndex];
+        
+        // Format times as HH:MM
+        const startTime = `${startDate.getHours().toString().padStart(2, '0')}:${startDate.getMinutes().toString().padStart(2, '0')}`;
+        const endTime = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
+        
+        // Check if this event already exists (by name, day, and time)
+        const exists = activities.some(
+          (a) => a.name === event.title && a.day === day && a.startTime === startTime && a.endTime === endTime
+        );
+        
+        if (exists) continue;
+
+        // Create the activity
+        try {
+          await createActivity({
+            userId: user.uid,
+            name: event.title,
+            day,
+            color: '#4285F4', // Google blue for imported events
+            isRecurring: false,
+            startTime,
+            endTime,
+          });
+          importedCount++;
+        } catch (err) {
+          console.error('Failed to import event:', event.title, err);
+        }
+      }
+
+      setImportSuccess(importedCount);
+    } catch (error) {
+      console.error('Failed to import Google Calendar:', error);
+      setImportError(error instanceof Error ? error.message : 'Failed to import calendar');
+    }
+
+    setIsImporting(false);
+  };
+
+  // Clear import messages after a delay
+  useEffect(() => {
+    if (importSuccess !== null || importError) {
+      const timer = setTimeout(() => {
+        setImportSuccess(null);
+        setImportError(null);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [importSuccess, importError]);
+
   // Mobile expanded single day view
   if (isMobile && selectedDay) {
     return (
@@ -975,6 +1124,10 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           activeTab={mobileActiveTab}
           onTabChange={handleTabChange}
           onActivityClick={handleActivityClick}
+          onImportGoogleCalendar={handleImportGoogleCalendar}
+          isImporting={isImporting}
+          importError={importError}
+          importSuccess={importSuccess}
         />
         <AddActivityModal
           visible={showAddActivity}
@@ -1005,6 +1158,10 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
         onActivityClick={handleActivityClick}
         showActivitiesPanel={showActivitiesPanel}
         onToggleActivitiesPanel={() => setShowActivitiesPanel(!showActivitiesPanel)}
+        onImportGoogleCalendar={handleImportGoogleCalendar}
+        isImporting={isImporting}
+        importError={importError}
+        importSuccess={importSuccess}
       />
       <AddActivityModal
         visible={showAddActivity}
@@ -1036,9 +1193,13 @@ type MobileWeekListProps = {
   activeTab: 'calendar' | 'add';
   onTabChange: (tab: 'calendar' | 'add') => void;
   onActivityClick?: (activity: Activity) => void;
+  onImportGoogleCalendar?: () => void;
+  isImporting?: boolean;
+  importError?: string | null;
+  importSuccess?: number | null;
 };
 
-const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, activeTab, onTabChange, activities, onActivityClick }: MobileWeekListProps) => {
+const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, activeTab, onTabChange, activities, onActivityClick, onImportGoogleCalendar, isImporting, importError, importSuccess }: MobileWeekListProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
   
@@ -1248,14 +1409,57 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, acti
           ]}
         >
           <View style={[styles.addActivityView, { backgroundColor: colors.background }]}>
-            {/* New Activity Button at Top */}
-            <Pressable 
-              style={[styles.newActivityButtonTop, { backgroundColor: colors.primary }]}
-              onPress={onAddActivity}
-            >
-              <Ionicons name="add-circle" size={22} color="#ffffff" />
-              <Text style={styles.newActivityButtonTopText}>New Activity</Text>
-            </Pressable>
+            {/* Action Buttons at Top */}
+            <View style={styles.mobileActionButtons}>
+              <Pressable 
+                style={[styles.newActivityButtonTop, { backgroundColor: colors.primary }]}
+                onPress={onAddActivity}
+              >
+                <Ionicons name="add-circle" size={22} color="#ffffff" />
+                <Text style={styles.newActivityButtonTopText}>New Activity</Text>
+              </Pressable>
+              
+              {/* Import from Google Calendar */}
+              {onImportGoogleCalendar && (
+                <Pressable 
+                  style={[
+                    styles.importCalendarButtonMobile, 
+                    { 
+                      backgroundColor: colors.card,
+                      borderColor: colors.border,
+                      opacity: isImporting ? 0.6 : 1,
+                    }
+                  ]}
+                  onPress={onImportGoogleCalendar}
+                  disabled={isImporting}
+                >
+                  {isImporting ? (
+                    <Ionicons name="sync" size={20} color="#4285F4" />
+                  ) : (
+                    <Ionicons name="logo-google" size={20} color="#4285F4" />
+                  )}
+                  <Text style={[styles.importCalendarButtonMobileText, { color: colors.textPrimary }]}>
+                    {isImporting ? 'Importing...' : 'Import from Google'}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+
+            {/* Import Status Messages */}
+            {importError && (
+              <View style={[styles.importMessageMobile, { backgroundColor: '#FEE2E2' }]}>
+                <Ionicons name="alert-circle" size={18} color="#DC2626" />
+                <Text style={[styles.importMessageMobileText, { color: '#DC2626' }]}>{importError}</Text>
+              </View>
+            )}
+            {importSuccess !== null && importSuccess !== undefined && (
+              <View style={[styles.importMessageMobile, { backgroundColor: '#D1FAE5' }]}>
+                <Ionicons name="checkmark-circle" size={18} color="#059669" />
+                <Text style={[styles.importMessageMobileText, { color: '#059669' }]}>
+                  {importSuccess === 0 ? 'No events to import' : `Imported ${importSuccess} event${importSuccess > 1 ? 's' : ''}`}
+                </Text>
+              </View>
+            )}
 
             {/* Activities List */}
             <ScrollView 
@@ -1443,6 +1647,10 @@ type DesktopWeekGridProps = {
   onActivityClick?: (activity: Activity) => void;
   showActivitiesPanel: boolean;
   onToggleActivitiesPanel: () => void;
+  onImportGoogleCalendar?: () => void;
+  isImporting?: boolean;
+  importError?: string | null;
+  importSuccess?: number | null;
 };
 
 // Generate time slots from 12am to 11pm (full 24 hours)
@@ -1455,7 +1663,7 @@ const TIME_SLOTS = Array.from({ length: 24 }, (_, i) => {
 
 const HOUR_HEIGHT = 50; // Height of each hour slot in pixels
 
-const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onActivityClick, showActivitiesPanel, onToggleActivitiesPanel }: DesktopWeekGridProps) => {
+const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onActivityClick, showActivitiesPanel, onToggleActivitiesPanel, onImportGoogleCalendar, isImporting, importError, importSuccess }: DesktopWeekGridProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
   const scrollRef = useWeeklyGridScrollbar();
@@ -1476,6 +1684,46 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onA
             </Text>
           </View>
           <View style={styles.headerActions}>
+            {/* Import status messages */}
+            {importError && (
+              <View style={[styles.importMessage, { backgroundColor: '#FEE2E2' }]}>
+                <Ionicons name="alert-circle" size={16} color="#DC2626" />
+                <Text style={[styles.importMessageText, { color: '#DC2626' }]}>{importError}</Text>
+              </View>
+            )}
+            {importSuccess !== null && importSuccess !== undefined && (
+              <View style={[styles.importMessage, { backgroundColor: '#D1FAE5' }]}>
+                <Ionicons name="checkmark-circle" size={16} color="#059669" />
+                <Text style={[styles.importMessageText, { color: '#059669' }]}>
+                  {importSuccess === 0 ? 'No events to import' : `Imported ${importSuccess} event${importSuccess > 1 ? 's' : ''}`}
+                </Text>
+              </View>
+            )}
+            
+            {/* Import from Google Calendar button */}
+            {onImportGoogleCalendar && (
+              <Pressable
+                style={[
+                  styles.importCalendarButton, 
+                  { 
+                    backgroundColor: colors.inputBackground,
+                    opacity: isImporting ? 0.6 : 1,
+                  }
+                ]}
+                onPress={onImportGoogleCalendar}
+                disabled={isImporting}
+              >
+                {isImporting ? (
+                  <Ionicons name="sync" size={18} color={colors.textSecondary} />
+                ) : (
+                  <Ionicons name="calendar" size={18} color={colors.textSecondary} />
+                )}
+                <Text style={[styles.importCalendarButtonText, { color: colors.textSecondary }]}>
+                  {isImporting ? 'Importing...' : 'Import Calendar'}
+                </Text>
+              </Pressable>
+            )}
+            
             <Pressable
               style={[
                 styles.myActivitiesButton, 
@@ -1708,9 +1956,12 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onA
       {showActivitiesPanel && (
         <View style={[styles.activitiesPanel, { backgroundColor: colors.card, borderLeftColor: colors.border }]}>
           <View style={styles.activitiesPanelHeader}>
-            <Text style={[styles.activitiesPanelTitle, { color: colors.textPrimary }]}>
-              My Activities
-            </Text>
+            <View style={styles.activitiesPanelHeaderTop}>
+              <Text style={[styles.activitiesPanelTitle, { color: colors.textPrimary }]}>
+                My Activities
+              </Text>
+              <CloseButton onPress={onToggleActivitiesPanel} colors={colors} />
+            </View>
             <Text style={[styles.activitiesPanelCount, { color: colors.textSecondary }]}>
               {activities.length} {activities.length === 1 ? 'activity' : 'activities'}
             </Text>
@@ -1844,6 +2095,31 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  // Import Calendar Button
+  importCalendarButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  importCalendarButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  importMessage: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  importMessageText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
   // Activities Panel (Desktop)
   activitiesPanel: {
     position: 'absolute',
@@ -1860,10 +2136,22 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.1)',
   },
+  activitiesPanelHeaderTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
   activitiesPanelTitle: {
     fontSize: 18,
     fontWeight: '700',
-    marginBottom: 4,
+  },
+  activitiesPanelClose: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   activitiesPanelCount: {
     fontSize: 13,
@@ -2130,6 +2418,38 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  mobileActionButtons: {
+    gap: 12,
+    marginBottom: 8,
+  },
+  importCalendarButtonMobile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  importCalendarButtonMobileText: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  importMessageMobile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  importMessageMobileText: {
+    fontSize: 14,
+    fontWeight: '500',
+    flex: 1,
   },
   activitiesListScroll: {
     flex: 1,

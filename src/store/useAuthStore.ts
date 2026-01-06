@@ -77,10 +77,11 @@ export const useAuthStore = create<AuthState>()((set) => ({
     signOut: async () => {
       try {
         await signOutUser();
-        set({ error: undefined });
       } catch (error) {
-        set({ error: (error as Error).message });
+        console.warn('Sign out error:', error);
       }
+      // Always clear the user state, even if server signout fails
+      set({ user: undefined, error: undefined });
     },
   }));
 
