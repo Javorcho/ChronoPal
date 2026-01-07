@@ -322,15 +322,15 @@ const AddActivityButton = ({ onPress, colors }: AddActivityButtonProps) => {
   );
 };
 
-// Get current week's date range (Monday to Sunday)
-const getWeekDateRange = () => {
+// Get week's date range (Monday to Sunday) with offset
+const getWeekDateRange = (weekOffset: number = 0) => {
   const today = new Date();
   const dayOfWeek = today.getDay();
   // Adjust so Monday = 0
   const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
   
   const monday = new Date(today);
-  monday.setDate(today.getDate() + mondayOffset);
+  monday.setDate(today.getDate() + mondayOffset + (weekOffset * 7));
   
   const sunday = new Date(monday);
   sunday.setDate(monday.getDate() + 6);
@@ -345,6 +345,60 @@ const getWeekDateRange = () => {
   }
   // If different months, show "Dec 30 - Jan 5, 2025"
   return `${formatDate(monday)} - ${formatDate(sunday)}, ${sunday.getFullYear()}`;
+};
+
+// Get the Monday date for a given week offset
+const getWeekMonday = (weekOffset: number = 0) => {
+  const today = new Date();
+  const dayOfWeek = today.getDay();
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + mondayOffset + (weekOffset * 7));
+  monday.setHours(0, 0, 0, 0);
+  
+  return monday;
+};
+
+// Check if a given day index is today for a specific week offset
+const isDayToday = (dayIndex: number, weekOffset: number): boolean => {
+  if (weekOffset !== 0) return false; // Only current week has "today"
+  const today = new Date();
+  const todayDayOfWeek = today.getDay();
+  // Convert Sunday=0 to Sunday=6 (our format is Monday=0)
+  const adjustedToday = todayDayOfWeek === 0 ? 6 : todayDayOfWeek - 1;
+  return dayIndex === adjustedToday;
+};
+
+// Week Navigation Button component
+type WeekNavButtonProps = {
+  direction: 'prev' | 'next';
+  onPress: () => void;
+  colors: any;
+};
+
+const WeekNavButton = ({ direction, onPress, colors }: WeekNavButtonProps) => {
+  const [isHovered, setIsHovered] = useState(false);
+  
+  return (
+    <Pressable
+      style={[
+        styles.weekNavButton,
+        {
+          backgroundColor: isHovered ? colors.primary + '20' : 'transparent',
+        }
+      ]}
+      onPress={onPress}
+      onHoverIn={() => setIsHovered(true)}
+      onHoverOut={() => setIsHovered(false)}
+    >
+      <Ionicons 
+        name={direction === 'prev' ? 'chevron-back' : 'chevron-forward'} 
+        size={20} 
+        color={isHovered ? colors.primary : colors.textSecondary} 
+      />
+    </Pressable>
+  );
 };
 
 type WeeklyGridScreenProps = {
@@ -971,6 +1025,9 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<number | null>(null);
+  
+  // Week navigation state
+  const [weekOffset, setWeekOffset] = useState(0);
 
   // Subscribe to activities from Supabase
   useEffect(() => {
@@ -1301,6 +1358,8 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           isImporting={isImporting}
           importError={importError}
           importSuccess={importSuccess}
+          weekOffset={weekOffset}
+          onWeekChange={setWeekOffset}
         />
         <AddActivityModal
           visible={showAddActivity}
@@ -1335,6 +1394,10 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
         isImporting={isImporting}
         importError={importError}
         importSuccess={importSuccess}
+        weekOffset={weekOffset}
+        onPrevWeek={() => setWeekOffset(prev => prev - 1)}
+        onNextWeek={() => setWeekOffset(prev => prev + 1)}
+        onGoToToday={() => setWeekOffset(0)}
       />
       <AddActivityModal
         visible={showAddActivity}
@@ -1370,9 +1433,11 @@ type MobileWeekListProps = {
   isImporting?: boolean;
   importError?: string | null;
   importSuccess?: number | null;
+  weekOffset: number;
+  onWeekChange: (offset: number) => void;
 };
 
-const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, activeTab, onTabChange, activities, onActivityClick, onImportGoogleCalendar, isImporting, importError, importSuccess }: MobileWeekListProps) => {
+const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, activeTab, onTabChange, activities, onActivityClick, onImportGoogleCalendar, isImporting, importError, importSuccess, weekOffset, onWeekChange }: MobileWeekListProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
   
@@ -1446,10 +1511,32 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, acti
       <View style={styles.headerWithNav}>
         <View style={[styles.header, { backgroundColor: headerColor }]}>
           <View style={styles.headerContent}>
-            <View>
-              <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
-                {getWeekDateRange()}
-              </Text>
+            <View style={styles.weekNavContainer}>
+              <Pressable
+                style={styles.weekNavButtonMobile}
+                onPress={() => onWeekChange(weekOffset - 1)}
+              >
+                <Ionicons name="chevron-back" size={20} color={colors.textSecondary} />
+              </Pressable>
+              <Pressable onPress={() => weekOffset !== 0 && onWeekChange(0)}>
+                <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
+                  {getWeekDateRange(weekOffset)}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={styles.weekNavButtonMobile}
+                onPress={() => onWeekChange(weekOffset + 1)}
+              >
+                <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+              </Pressable>
+              {weekOffset !== 0 && (
+                <Pressable
+                  style={[styles.todayButtonMobile, { backgroundColor: colors.primary }]}
+                  onPress={() => onWeekChange(0)}
+                >
+                  <Text style={styles.todayButtonMobileText}>Today</Text>
+                </Pressable>
+              )}
             </View>
             {onSignOut && (
               <LogoutButton onPress={onSignOut} isMobile={true} colors={colors} />
@@ -1498,7 +1585,7 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, acti
         >
           <View style={styles.mobileListFull}>
             {dayOrder.map((day, index) => {
-              const isToday = day === currentDay;
+              const isToday = isDayToday(index, weekOffset);
               const isLast = index === dayOrder.length - 1;
               return (
                 <Pressable
@@ -1824,6 +1911,10 @@ type DesktopWeekGridProps = {
   isImporting?: boolean;
   importError?: string | null;
   importSuccess?: number | null;
+  weekOffset: number;
+  onPrevWeek: () => void;
+  onNextWeek: () => void;
+  onGoToToday: () => void;
 };
 
 // Generate time slots from 12am to 11pm (full 24 hours)
@@ -1836,7 +1927,7 @@ const TIME_SLOTS = Array.from({ length: 24 }, (_, i) => {
 
 const HOUR_HEIGHT = 50; // Height of each hour slot in pixels
 
-const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onActivityClick, showActivitiesPanel, onToggleActivitiesPanel, onImportGoogleCalendar, isImporting, importError, importSuccess }: DesktopWeekGridProps) => {
+const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onActivityClick, showActivitiesPanel, onToggleActivitiesPanel, onImportGoogleCalendar, isImporting, importError, importSuccess, weekOffset, onPrevWeek, onNextWeek, onGoToToday }: DesktopWeekGridProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
   const scrollRef = useWeeklyGridScrollbar();
@@ -1851,10 +1942,20 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onA
       {/* Header */}
       <View style={[styles.header, { backgroundColor: colors.card }]}>
         <View style={styles.headerContent}>
-          <View>
+          <View style={styles.weekNavContainer}>
+            <WeekNavButton direction="prev" onPress={onPrevWeek} colors={colors} />
             <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
-              {getWeekDateRange()}
+              {getWeekDateRange(weekOffset)}
             </Text>
+            <WeekNavButton direction="next" onPress={onNextWeek} colors={colors} />
+            {weekOffset !== 0 && (
+              <Pressable
+                style={[styles.todayButton, { backgroundColor: colors.primary + '20' }]}
+                onPress={onGoToToday}
+              >
+                <Text style={[styles.todayButtonText, { color: colors.primary }]}>Today</Text>
+              </Pressable>
+            )}
           </View>
           <View style={styles.headerActions}>
             {/* Import status messages */}
@@ -1905,8 +2006,8 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onA
         
         {/* Day Columns with Headers */}
         <View style={[styles.dayColumnsWrapper, { gap: GAP }]}>
-          {dayOrder.map((day) => {
-            const isToday = day === currentDay;
+          {dayOrder.map((day, index) => {
+            const isToday = isDayToday(index, weekOffset);
             return (
               <View
                 key={day}
@@ -1966,8 +2067,8 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onA
 
           {/* Day Columns Grid */}
           <View style={[styles.dayColumnsWrapper, { gap: GAP }]}>
-            {dayOrder.map((day) => {
-              const isToday = day === currentDay;
+            {dayOrder.map((day, index) => {
+              const isToday = isDayToday(index, weekOffset);
               const dayActivities = activities.filter((a) => a.day === day);
               // Grid starts at 12 AM (hour 0)
               const GRID_START_HOUR = 0;
@@ -2173,6 +2274,46 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '700',
     letterSpacing: -0.5,
+  },
+  weekNavContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  weekNavButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weekNavButtonMobile: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  todayButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+    marginLeft: 8,
+  },
+  todayButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  todayButtonMobile: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginLeft: 4,
+  },
+  todayButtonMobileText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ffffff',
   },
   headerSubtitle: {
     fontSize: 14,
