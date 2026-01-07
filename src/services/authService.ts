@@ -1,12 +1,82 @@
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { isSupabaseConfigured } from '@/config/env';
 import { getSupabaseClient } from '@/lib/supabase';
 
 // Required for web OAuth
 WebBrowser.maybeCompleteAuthSession();
+
+// Storage keys for Google tokens
+const GOOGLE_TOKEN_KEY = 'chronopal_google_token';
+const GOOGLE_REFRESH_TOKEN_KEY = 'chronopal_google_refresh_token';
+const GOOGLE_TOKEN_EXPIRY_KEY = 'chronopal_google_token_expiry';
+
+// Helper to store Google tokens
+const storeGoogleTokens = async (accessToken: string, refreshToken?: string, expiresIn?: number) => {
+  try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.localStorage.setItem(GOOGLE_TOKEN_KEY, accessToken);
+      if (refreshToken) {
+        window.localStorage.setItem(GOOGLE_REFRESH_TOKEN_KEY, refreshToken);
+      }
+      if (expiresIn) {
+        const expiry = Date.now() + (expiresIn * 1000);
+        window.localStorage.setItem(GOOGLE_TOKEN_EXPIRY_KEY, expiry.toString());
+      }
+    } else {
+      await AsyncStorage.setItem(GOOGLE_TOKEN_KEY, accessToken);
+      if (refreshToken) {
+        await AsyncStorage.setItem(GOOGLE_REFRESH_TOKEN_KEY, refreshToken);
+      }
+      if (expiresIn) {
+        const expiry = Date.now() + (expiresIn * 1000);
+        await AsyncStorage.setItem(GOOGLE_TOKEN_EXPIRY_KEY, expiry.toString());
+      }
+    }
+  } catch (e) {
+    console.error('Failed to store Google tokens:', e);
+  }
+};
+
+// Helper to get stored Google tokens
+const getStoredGoogleTokens = async () => {
+  try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      const accessToken = window.localStorage.getItem(GOOGLE_TOKEN_KEY);
+      const refreshToken = window.localStorage.getItem(GOOGLE_REFRESH_TOKEN_KEY);
+      const expiryStr = window.localStorage.getItem(GOOGLE_TOKEN_EXPIRY_KEY);
+      const expiry = expiryStr ? parseInt(expiryStr, 10) : null;
+      return { accessToken, refreshToken, expiry };
+    } else {
+      const accessToken = await AsyncStorage.getItem(GOOGLE_TOKEN_KEY);
+      const refreshToken = await AsyncStorage.getItem(GOOGLE_REFRESH_TOKEN_KEY);
+      const expiryStr = await AsyncStorage.getItem(GOOGLE_TOKEN_EXPIRY_KEY);
+      const expiry = expiryStr ? parseInt(expiryStr, 10) : null;
+      return { accessToken, refreshToken, expiry };
+    }
+  } catch (e) {
+    console.error('Failed to get Google tokens:', e);
+    return { accessToken: null, refreshToken: null, expiry: null };
+  }
+};
+
+// Helper to clear Google tokens
+const clearGoogleTokens = async () => {
+  try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.localStorage.removeItem(GOOGLE_TOKEN_KEY);
+      window.localStorage.removeItem(GOOGLE_REFRESH_TOKEN_KEY);
+      window.localStorage.removeItem(GOOGLE_TOKEN_EXPIRY_KEY);
+    } else {
+      await AsyncStorage.multiRemove([GOOGLE_TOKEN_KEY, GOOGLE_REFRESH_TOKEN_KEY, GOOGLE_TOKEN_EXPIRY_KEY]);
+    }
+  } catch (e) {
+    console.error('Failed to clear Google tokens:', e);
+  }
+};
 
 // Handle OAuth callback on web - must run early before React renders
 const handleWebOAuthCallback = async () => {
@@ -23,6 +93,9 @@ const handleWebOAuthCallback = async () => {
   const params = new URLSearchParams(hash.substring(1));
   const accessToken = params.get('access_token');
   const refreshToken = params.get('refresh_token');
+  const providerToken = params.get('provider_token');
+  const providerRefreshToken = params.get('provider_refresh_token');
+  const expiresIn = params.get('expires_in');
 
   if (accessToken && refreshToken) {
     const supabase = getSupabaseClient();
@@ -31,6 +104,16 @@ const handleWebOAuthCallback = async () => {
         access_token: accessToken,
         refresh_token: refreshToken,
       });
+      
+      // Store Google provider tokens if present
+      if (providerToken) {
+        await storeGoogleTokens(
+          providerToken, 
+          providerRefreshToken || undefined,
+          expiresIn ? parseInt(expiresIn, 10) : 3600
+        );
+      }
+      
       // Clean up URL
       window.history.replaceState(null, '', window.location.pathname);
     } catch (e) {
@@ -103,6 +186,16 @@ export const subscribeToAuthChanges = (
     const user = session?.user
       ? { uid: session.user.id, email: session.user.email ?? undefined }
       : undefined;
+    
+    // Store provider token if available
+    if (session?.provider_token) {
+      storeGoogleTokens(
+        session.provider_token, 
+        session.provider_refresh_token || undefined, 
+        3600
+      );
+    }
+    
     callback(user);
   });
 
@@ -111,6 +204,21 @@ export const subscribeToAuthChanges = (
     const user = session?.user
       ? { uid: session.user.id, email: session.user.email ?? undefined }
       : undefined;
+    
+    // Store provider token when signing in
+    if (event === 'SIGNED_IN' && session?.provider_token) {
+      storeGoogleTokens(
+        session.provider_token, 
+        session.provider_refresh_token || undefined, 
+        3600
+      );
+    }
+    
+    // Clear tokens on sign out
+    if (event === 'SIGNED_OUT') {
+      clearGoogleTokens();
+    }
+    
     callback(user);
   });
 
@@ -172,6 +280,9 @@ export const signOutUser = async () => {
     // If server signout fails (403, etc.), still clear local session
     console.warn('Server signout failed, clearing local session:', error);
   }
+  
+  // Clear Google tokens
+  await clearGoogleTokens();
   
   // Clear any stored tokens in localStorage (web)
   if (typeof window !== 'undefined' && window.localStorage) {
@@ -255,6 +366,8 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
 
       const accessToken = params.get('access_token');
       const refreshToken = params.get('refresh_token');
+      const providerToken = params.get('provider_token');
+      const providerRefreshToken = params.get('provider_refresh_token');
 
       if (accessToken && refreshToken) {
         const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
@@ -266,7 +379,15 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
           throw sessionError;
         }
 
-        return toAuthUser(sessionData.user, accessToken);
+        // Store Google provider token if available from params or session
+        const googleToken = providerToken || sessionData.session?.provider_token;
+        const googleRefreshToken = providerRefreshToken || sessionData.session?.provider_refresh_token;
+        
+        if (googleToken && provider === 'google') {
+          await storeGoogleTokens(googleToken, googleRefreshToken || undefined, 3600);
+        }
+
+        return toAuthUser(sessionData.user, googleToken || accessToken);
       } else {
         // Check for error in params
         const errorMsg = params.get('error_description') || params.get('error');
@@ -304,6 +425,23 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
   return undefined;
 };
 
+// Refresh Google access token using refresh token
+const refreshGoogleToken = async (refreshToken: string): Promise<string | null> => {
+  try {
+    // We need to use Supabase's edge function or a backend to refresh the token
+    // For now, we'll use a direct Google API call (works for web, may have CORS issues)
+    // A better approach would be to use Supabase Edge Functions
+    
+    // Get the Google OAuth client ID from Supabase
+    // For now, we'll just return null and let the user re-authenticate
+    console.log('Token refresh needed - re-authentication may be required');
+    return null;
+  } catch (e) {
+    console.error('Failed to refresh Google token:', e);
+    return null;
+  }
+};
+
 // Get current session with provider token (for calendar API access)
 export const getSessionWithToken = async () => {
   if (!isSupabaseConfigured) {
@@ -317,10 +455,43 @@ export const getSessionWithToken = async () => {
     return null;
   }
 
+  // First check if Supabase has the provider token
+  let providerToken = data.session.provider_token;
+  let providerRefreshToken = data.session.provider_refresh_token;
+
+  // If not available from Supabase session, check stored tokens
+  if (!providerToken) {
+    const stored = await getStoredGoogleTokens();
+    
+    if (stored.accessToken) {
+      // Check if token is expired
+      const isExpired = stored.expiry && Date.now() > stored.expiry;
+      
+      if (!isExpired) {
+        providerToken = stored.accessToken;
+        providerRefreshToken = stored.refreshToken;
+      } else if (stored.refreshToken) {
+        // Try to refresh the token
+        const newToken = await refreshGoogleToken(stored.refreshToken);
+        if (newToken) {
+          providerToken = newToken;
+          await storeGoogleTokens(newToken, stored.refreshToken, 3600);
+        }
+      }
+    }
+  } else {
+    // Store the provider token from session for future use
+    await storeGoogleTokens(
+      providerToken, 
+      providerRefreshToken || undefined, 
+      3600
+    );
+  }
+
   return {
-    user: toAuthUser(data.session.user, data.session.provider_token ?? undefined),
-    providerToken: data.session.provider_token,
-    providerRefreshToken: data.session.provider_refresh_token,
+    user: toAuthUser(data.session.user, providerToken ?? undefined),
+    providerToken: providerToken,
+    providerRefreshToken: providerRefreshToken,
   };
 };
 
