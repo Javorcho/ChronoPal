@@ -3,12 +3,72 @@ import {
   ActivityId,
   ActivityInput,
   ActivityUpdate,
+  ActivitySource,
+  ActivityStatus,
+  DayOfWeek,
+  dayOrder,
+  formatDateToISO,
+  dayToDate,
+  dateToDayOfWeek,
 } from '@/types/schedule';
 import { isSupabaseConfigured } from '@/config/env';
 import { getMockActivities } from '@/utils/mockActivities';
 import { getSupabaseClient } from '@/lib/supabase';
 
 const COLLECTION = 'activities';
+
+const mapRowToActivity = (row: any): Activity => ({
+  id: row.id,
+  userId: row.user_id,
+  name: row.name,
+  color: row.color,
+  day: row.day,
+  activityDate: row.activity_date,
+  startTime: row.start_time,
+  endTime: row.end_time,
+  isRecurring: row.is_recurring,
+  recurrence: row.recurrence,
+  recurrenceRule: row.recurrence_rule,
+  recurrenceEndDate: row.recurrence_end_date,
+  parentActivityId: row.parent_activity_id,
+  categoryId: row.category_id,
+  status: row.status || ActivityStatus.Scheduled,
+  priority: row.priority,
+  description: row.description,
+  location: row.location,
+  notes: row.notes,
+  externalId: row.external_id,
+  source: row.source || ActivitySource.Manual,
+  lastSyncedAt: row.last_synced_at ? new Date(row.last_synced_at).getTime() : undefined,
+  timezone: row.timezone,
+  createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+  updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : Date.now(),
+});
+
+const mapInputToPayload = (input: ActivityInput): Record<string, any> => ({
+  user_id: input.userId,
+  name: input.name,
+  color: input.color,
+  day: input.day,
+  activity_date: input.activityDate,
+  start_time: input.startTime,
+  end_time: input.endTime,
+  is_recurring: input.isRecurring,
+  recurrence: input.recurrence,
+  recurrence_rule: input.recurrenceRule,
+  recurrence_end_date: input.recurrenceEndDate,
+  parent_activity_id: input.parentActivityId,
+  category_id: input.categoryId,
+  status: input.status || ActivityStatus.Scheduled,
+  priority: input.priority,
+  description: input.description,
+  location: input.location,
+  notes: input.notes,
+  external_id: input.externalId,
+  source: input.source || ActivitySource.Manual,
+  last_synced_at: input.lastSyncedAt ? new Date(input.lastSyncedAt).toISOString() : null,
+  timezone: input.timezone,
+});
 
 export const subscribeToActivities = (
   userId: string,
@@ -20,22 +80,17 @@ export const subscribeToActivities = (
   }
 
   const supabase = getSupabaseClient();
-
   const channel = supabase
     .channel(`public:${COLLECTION}:${userId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: COLLECTION,
-        filter: `user_id=eq.${userId}`,
-      },
-      async () => {
-        const latest = await fetchActivities(userId);
-        callback(latest);
-      },
-    )
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: COLLECTION,
+      filter: `user_id=eq.${userId}`,
+    }, async () => {
+      const latest = await fetchActivities(userId);
+      callback(latest);
+    })
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         fetchActivities(userId).then(callback).catch(() => {
@@ -44,9 +99,7 @@ export const subscribeToActivities = (
       }
     });
 
-  return () => {
-    supabase.removeChannel(channel);
-  };
+  return () => { supabase.removeChannel(channel); };
 };
 
 export const fetchActivities = async (userId: string): Promise<Activity[]> => {
@@ -61,110 +114,144 @@ export const fetchActivities = async (userId: string): Promise<Activity[]> => {
     .eq('user_id', userId)
     .order('start_time', { ascending: true });
 
-  if (error) {
-    throw error;
-  }
-
-  return (data ?? []).map((row: any) => ({
-    id: row.id,
-    userId: row.user_id,
-    name: row.name,
-    color: row.color,
-    day: row.day,
-    startTime: row.start_time,
-    endTime: row.end_time,
-    isRecurring: row.is_recurring,
-    recurrence: row.recurrence,
-    notes: row.notes,
-    createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
-    updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : Date.now(),
-  }));
+  if (error) throw error;
+  return (data ?? []).map(mapRowToActivity);
 };
 
-export const createActivity = async (
-  input: ActivityInput,
-): Promise<Activity> => {
+export const fetchActivitiesForDateRange = async (
+  userId: string,
+  startDate: string,
+  endDate: string,
+): Promise<Activity[]> => {
   if (!isSupabaseConfigured) {
-    const fallbackActivity: Activity = {
+    const mock = getMockActivities(userId);
+    return mock.filter(a => {
+      if (a.activityDate) return a.activityDate >= startDate && a.activityDate <= endDate;
+      return a.isRecurring;
+    });
+  }
+
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from(COLLECTION)
+    .select('*')
+    .eq('user_id', userId)
+    .or(`activity_date.gte.${startDate},activity_date.lte.${endDate},and(activity_date.is.null,is_recurring.eq.true)`)
+    .order('start_time', { ascending: true });
+
+  if (error) throw error;
+  return (data ?? []).map(mapRowToActivity);
+};
+
+export const fetchActivitiesForWeek = async (userId: string, weekOffset: number = 0): Promise<Activity[]> => {
+  const weekDates = dayOrder.map(day => formatDateToISO(dayToDate(day, weekOffset)));
+  return fetchActivitiesForDateRange(userId, weekDates[0], weekDates[6]);
+};
+
+export const getActivitiesForDay = (activities: Activity[], day: DayOfWeek, weekOffset: number = 0): Activity[] => {
+  const targetDate = formatDateToISO(dayToDate(day, weekOffset));
+  return activities.filter(activity => {
+    if (activity.activityDate) return activity.activityDate === targetDate;
+    if (activity.isRecurring && activity.day === day) return true;
+    return activity.day === day && !activity.activityDate;
+  });
+};
+
+export const createActivity = async (input: ActivityInput): Promise<Activity> => {
+  if (!isSupabaseConfigured) {
+    return {
       id: `mock-${Date.now()}`,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       ...input,
+      status: input.status || ActivityStatus.Scheduled,
+      source: input.source || ActivitySource.Manual,
     };
-    return fallbackActivity;
   }
 
   const supabase = getSupabaseClient();
-  const payload = {
-    user_id: input.userId,
-    name: input.name,
-    color: input.color,
-    day: input.day,
-    start_time: input.startTime,
-    end_time: input.endTime,
-    is_recurring: input.isRecurring,
-    recurrence: input.recurrence,
-    notes: input.notes,
-  };
-
-  const { data, error } = await supabase.from(COLLECTION).insert(payload).select().single();
-  if (error) {
-    throw error;
-  }
-
-  return {
-    id: data.id,
-    userId: data.user_id,
-    name: data.name,
-    color: data.color,
-    day: data.day,
-    startTime: data.start_time,
-    endTime: data.end_time,
-    isRecurring: data.is_recurring,
-    recurrence: data.recurrence,
-    notes: data.notes,
-    createdAt: data.created_at ? new Date(data.created_at).getTime() : Date.now(),
-    updatedAt: data.updated_at ? new Date(data.updated_at).getTime() : Date.now(),
-  };
+  const { data, error } = await supabase.from(COLLECTION).insert(mapInputToPayload(input)).select().single();
+  if (error) throw error;
+  return mapRowToActivity(data);
 };
 
-export const updateActivity = async (
-  id: ActivityId,
-  updates: ActivityUpdate,
-) => {
-  if (!isSupabaseConfigured) {
-    return;
-  }
+export const createActivityForDate = async (input: Omit<ActivityInput, 'activityDate'>, date: Date): Promise<Activity> => {
+  return createActivity({ ...input, activityDate: formatDateToISO(date), day: dateToDayOfWeek(date) });
+};
+
+export const updateActivity = async (id: ActivityId, updates: ActivityUpdate) => {
+  if (!isSupabaseConfigured) return;
 
   const supabase = getSupabaseClient();
-  const payload: Record<string, any> = {
-    ...updates,
-    updated_at: new Date().toISOString(),
-  };
+  const payload: Record<string, any> = { updated_at: new Date().toISOString() };
 
-  if (updates.startTime) payload.start_time = updates.startTime;
-  if (updates.endTime) payload.end_time = updates.endTime;
+  if (updates.name !== undefined) payload.name = updates.name;
+  if (updates.color !== undefined) payload.color = updates.color;
+  if (updates.day !== undefined) payload.day = updates.day;
+  if (updates.activityDate !== undefined) payload.activity_date = updates.activityDate;
+  if (updates.startTime !== undefined) payload.start_time = updates.startTime;
+  if (updates.endTime !== undefined) payload.end_time = updates.endTime;
   if (updates.isRecurring !== undefined) payload.is_recurring = updates.isRecurring;
-
-  delete payload.startTime;
-  delete payload.endTime;
-  delete payload.isRecurring;
+  if (updates.recurrence !== undefined) payload.recurrence = updates.recurrence;
+  if (updates.categoryId !== undefined) payload.category_id = updates.categoryId;
+  if (updates.status !== undefined) payload.status = updates.status;
+  if (updates.priority !== undefined) payload.priority = updates.priority;
+  if (updates.description !== undefined) payload.description = updates.description;
+  if (updates.location !== undefined) payload.location = updates.location;
+  if (updates.notes !== undefined) payload.notes = updates.notes;
+  if (updates.externalId !== undefined) payload.external_id = updates.externalId;
+  if (updates.source !== undefined) payload.source = updates.source;
 
   const { error } = await supabase.from(COLLECTION).update(payload).eq('id', id);
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
 };
 
 export const removeActivity = async (id: ActivityId) => {
-  if (!isSupabaseConfigured) {
-    return;
-  }
-
+  if (!isSupabaseConfigured) return;
   const supabase = getSupabaseClient();
   const { error } = await supabase.from(COLLECTION).delete().eq('id', id);
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
 };
 
+export const findByExternalId = async (userId: string, externalId: string, source: ActivitySource): Promise<Activity | null> => {
+  if (!isSupabaseConfigured) return null;
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from(COLLECTION)
+    .select('*')
+    .eq('user_id', userId)
+    .eq('external_id', externalId)
+    .eq('source', source)
+    .single();
+  if (error || !data) return null;
+  return mapRowToActivity(data);
+};
+
+export const importExternalActivity = async (input: ActivityInput): Promise<Activity> => {
+  if (!input.externalId || !input.source) throw new Error('External ID and source required');
+  const existing = await findByExternalId(input.userId, input.externalId, input.source);
+  if (existing) {
+    await updateActivity(existing.id, { ...input, lastSyncedAt: Date.now() });
+    return { ...existing, ...input, lastSyncedAt: Date.now() };
+  }
+  return createActivity({ ...input, lastSyncedAt: Date.now() });
+};
+
+export const completeActivity = async (id: ActivityId) => updateActivity(id, { status: ActivityStatus.Completed });
+export const cancelActivity = async (id: ActivityId) => updateActivity(id, { status: ActivityStatus.Cancelled });
+
+export const getActivityStats = async (userId: string) => {
+  const activities = await fetchActivities(userId);
+  const today = formatDateToISO(new Date());
+  const todayDayOfWeek = dateToDayOfWeek(new Date());
+  return {
+    total: activities.length,
+    scheduled: activities.filter(a => a.status === ActivityStatus.Scheduled || !a.status).length,
+    completed: activities.filter(a => a.status === ActivityStatus.Completed).length,
+    recurring: activities.filter(a => a.isRecurring).length,
+    todayCount: activities.filter(a => {
+      if (a.activityDate) return a.activityDate === today;
+      return a.day === todayDayOfWeek;
+    }).length,
+  };
+};

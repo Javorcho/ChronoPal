@@ -17,8 +17,8 @@ import {
 
 import { useTheme } from '@/store/useThemeStore';
 import { useAuthStore } from '@/store/useAuthStore';
-import { Activity, dayNames, DayOfWeek, dayOrder } from '@/types/schedule';
-import { subscribeToActivities, createActivity, updateActivity, removeActivity } from '@/services/activityService';
+import { Activity, dayNames, DayOfWeek, dayOrder, formatDateToISO, dayToDate, dateToDayOfWeek, ActivitySource } from '@/types/schedule';
+import { subscribeToActivities, createActivity, updateActivity, removeActivity, getActivitiesForDay } from '@/services/activityService';
 import { fetchGoogleCalendarEvents } from '@/services/calendarService';
 import { getSessionWithToken } from '@/services/authService';
 
@@ -401,6 +401,109 @@ const WeekNavButton = ({ direction, onPress, colors }: WeekNavButtonProps) => {
   );
 };
 
+// View Toggle Button (Weekly/Monthly)
+type ViewToggleButtonProps = {
+  viewMode: 'weekly' | 'monthly';
+  onToggle: () => void;
+  colors: any;
+};
+
+const ViewToggleButton = ({ viewMode, onToggle, colors }: ViewToggleButtonProps) => {
+  const [isHovered, setIsHovered] = useState(false);
+  
+  return (
+    <Pressable
+      style={[
+        styles.viewToggleButton,
+        {
+          backgroundColor: isHovered ? colors.primary + '20' : colors.inputBackground,
+          borderColor: isHovered ? colors.primary : 'transparent',
+          borderWidth: 1,
+        }
+      ]}
+      onPress={onToggle}
+      onHoverIn={() => setIsHovered(true)}
+      onHoverOut={() => setIsHovered(false)}
+    >
+      <Ionicons 
+        name={viewMode === 'weekly' ? 'calendar-outline' : 'grid-outline'} 
+        size={16} 
+        color={isHovered ? colors.primary : colors.textSecondary} 
+      />
+      <Text style={[
+        styles.viewToggleText,
+        { color: isHovered ? colors.primary : colors.textSecondary }
+      ]}>
+        {viewMode === 'weekly' ? 'Month' : 'Week'}
+      </Text>
+    </Pressable>
+  );
+};
+
+// Get month name and year for a given month offset
+const getMonthDateRange = (monthOffset: number = 0): string => {
+  const today = new Date();
+  const targetDate = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1);
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 
+                  'July', 'August', 'September', 'October', 'November', 'December'];
+  return `${months[targetDate.getMonth()]} ${targetDate.getFullYear()}`;
+};
+
+// Get all days in a month grid (including padding days from prev/next months)
+const getMonthGrid = (monthOffset: number = 0): { date: Date; isCurrentMonth: boolean; isToday: boolean }[] => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const targetDate = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1);
+  const year = targetDate.getFullYear();
+  const month = targetDate.getMonth();
+  
+  // First day of month (0 = Sunday, we want Monday = 0)
+  let firstDayOfWeek = new Date(year, month, 1).getDay();
+  firstDayOfWeek = firstDayOfWeek === 0 ? 6 : firstDayOfWeek - 1; // Convert to Monday = 0
+  
+  // Days in current month
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  
+  // Days in previous month
+  const daysInPrevMonth = new Date(year, month, 0).getDate();
+  
+  const grid: { date: Date; isCurrentMonth: boolean; isToday: boolean }[] = [];
+  
+  // Add days from previous month
+  for (let i = firstDayOfWeek - 1; i >= 0; i--) {
+    const date = new Date(year, month - 1, daysInPrevMonth - i);
+    grid.push({ 
+      date, 
+      isCurrentMonth: false, 
+      isToday: date.getTime() === today.getTime() 
+    });
+  }
+  
+  // Add days from current month
+  for (let day = 1; day <= daysInMonth; day++) {
+    const date = new Date(year, month, day);
+    grid.push({ 
+      date, 
+      isCurrentMonth: true, 
+      isToday: date.getTime() === today.getTime() 
+    });
+  }
+  
+  // Add days from next month to complete the grid (6 rows × 7 days = 42)
+  const remaining = 42 - grid.length;
+  for (let day = 1; day <= remaining; day++) {
+    const date = new Date(year, month + 1, day);
+    grid.push({ 
+      date, 
+      isCurrentMonth: false, 
+      isToday: date.getTime() === today.getTime() 
+    });
+  }
+  
+  return grid;
+};
+
 type WeeklyGridScreenProps = {
   onSignOut?: () => void;
 };
@@ -416,8 +519,11 @@ type AddActivityModalProps = {
     isRecurring: boolean;
     startTime: string;
     endTime: string;
+    activityDate?: string; // YYYY-MM-DD for specific date
   }) => Promise<string | null>; // Returns error message or null on success
   colors: any;
+  mode?: 'weekly' | 'monthly'; // Selection mode
+  monthOffset?: number; // For monthly mode date picker
 };
 
 // Helper to parse time string (HH:MM) to minutes from midnight
@@ -445,18 +551,22 @@ const formatTimeInput = (text: string): string => {
   return `${digits.slice(0, 2)}:${digits.slice(2, 4)}`;
 };
 
-const AddActivityModal = ({ visible, onClose, onSave, colors }: AddActivityModalProps) => {
+const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', monthOffset = 0 }: AddActivityModalProps) => {
   const [name, setName] = useState('');
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>(DayOfWeek.Monday);
+  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [selectedColor, setSelectedColor] = useState(ACTIVITY_COLORS[0]);
   const [isRecurring, setIsRecurring] = useState(false);
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
   const [timeError, setTimeError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [datePickerMonth, setDatePickerMonth] = useState(monthOffset);
 
   const reset = () => {
     setName('');
+    setSelectedDate(null);
+    setDatePickerMonth(monthOffset);
     setSelectedDay(DayOfWeek.Monday);
     setSelectedColor(ACTIVITY_COLORS[0]);
     setIsRecurring(false);
@@ -494,16 +604,31 @@ const AddActivityModal = ({ visible, onClose, onSave, colors }: AddActivityModal
     if (!name.trim()) return;
     if (!validateTimes()) return;
     
+    // In monthly mode, require a date selection
+    if (mode === 'monthly' && !selectedDate) {
+      setTimeError('Please select a date');
+      return;
+    }
+    
     setIsSaving(true);
     setTimeError('');
     
+    // Determine day and date based on mode
+    const day = mode === 'monthly' && selectedDate 
+      ? dateToDayOfWeek(selectedDate)
+      : selectedDay;
+    const activityDate = mode === 'monthly' && selectedDate 
+      ? formatDateToISO(selectedDate)
+      : undefined;
+    
     const error = await onSave({
       name: name.trim(),
-      day: selectedDay,
+      day,
       color: selectedColor,
-      isRecurring,
+      isRecurring: mode === 'monthly' ? false : isRecurring, // No recurring in monthly mode for now
       startTime,
       endTime,
+      activityDate,
     });
     
     if (error) {
@@ -561,32 +686,46 @@ const AddActivityModal = ({ visible, onClose, onSave, colors }: AddActivityModal
               />
             </View>
 
-            <View style={styles.formGroup}>
-              <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Day</Text>
-              <View style={styles.daySelector}>
-                {dayOrder.map((day) => (
-                  <Pressable
-                    key={day}
-                    style={[
-                      styles.daySelectorButton,
-                      { backgroundColor: colors.inputBackground },
-                      selectedDay === day && { backgroundColor: colors.primary },
-                    ]}
-                    onPress={() => setSelectedDay(day)}
-                  >
-                    <Text
+            {mode === 'weekly' ? (
+              <View style={styles.formGroup}>
+                <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Day</Text>
+                <View style={styles.daySelector}>
+                  {dayOrder.map((day) => (
+                    <Pressable
+                      key={day}
                       style={[
-                        styles.daySelectorText,
-                        { color: colors.textSecondary },
-                        selectedDay === day && { color: '#ffffff' },
+                        styles.daySelectorButton,
+                        { backgroundColor: colors.inputBackground },
+                        selectedDay === day && { backgroundColor: colors.primary },
                       ]}
+                      onPress={() => setSelectedDay(day)}
                     >
-                      {dayNames[day]}
-                    </Text>
-                  </Pressable>
-                ))}
+                      <Text
+                        style={[
+                          styles.daySelectorText,
+                          { color: colors.textSecondary },
+                          selectedDay === day && { color: '#ffffff' },
+                        ]}
+                      >
+                        {dayNames[day]}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
               </View>
-            </View>
+            ) : (
+              <View style={styles.formGroup}>
+                <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Select Date</Text>
+                <MiniCalendarPicker
+                  selectedDate={selectedDate}
+                  onSelectDate={setSelectedDate}
+                  monthOffset={datePickerMonth}
+                  onPrevMonth={() => setDatePickerMonth(prev => prev - 1)}
+                  onNextMonth={() => setDatePickerMonth(prev => prev + 1)}
+                  colors={colors}
+                />
+              </View>
+            )}
 
             <View style={styles.formGroup}>
               <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Color</Text>
@@ -607,22 +746,24 @@ const AddActivityModal = ({ visible, onClose, onSave, colors }: AddActivityModal
               </View>
             </View>
 
-            <View style={styles.formGroup}>
-              <View style={styles.toggleRow}>
-                <View>
-                  <Text style={[styles.formLabel, { color: colors.textSecondary, marginBottom: 0 }]}>
-                    Recurring
-                  </Text>
-                  <Text style={[styles.toggleHint, { color: colors.placeholder }]}>Repeat every week</Text>
+            {mode === 'weekly' && (
+              <View style={styles.formGroup}>
+                <View style={styles.toggleRow}>
+                  <View>
+                    <Text style={[styles.formLabel, { color: colors.textSecondary, marginBottom: 0 }]}>
+                      Recurring
+                    </Text>
+                    <Text style={[styles.toggleHint, { color: colors.placeholder }]}>Repeat every week</Text>
+                  </View>
+                  <Switch
+                    value={isRecurring}
+                    onValueChange={setIsRecurring}
+                    trackColor={{ false: colors.inputBackground, true: colors.primary + '60' }}
+                    thumbColor={isRecurring ? colors.primary : colors.textSecondary}
+                  />
                 </View>
-                <Switch
-                  value={isRecurring}
-                  onValueChange={setIsRecurring}
-                  trackColor={{ false: colors.inputBackground, true: colors.primary + '60' }}
-                  thumbColor={isRecurring ? colors.primary : colors.textSecondary}
-                />
               </View>
-            </View>
+            )}
 
             <View style={styles.formGroup}>
               <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Time</Text>
@@ -1028,6 +1169,12 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
   
   // Week navigation state
   const [weekOffset, setWeekOffset] = useState(0);
+  
+  // Calendar view mode (weekly or monthly)
+  const [viewMode, setViewMode] = useState<'weekly' | 'monthly'>('weekly');
+  
+  // Month navigation state (for monthly view)
+  const [monthOffset, setMonthOffset] = useState(0);
 
   // Subscribe to activities from Supabase
   useEffect(() => {
@@ -1114,10 +1261,16 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
     }
 
     try {
+      // Calculate the specific date for this activity based on the selected day and week
+      const activityDate = activity.isRecurring 
+        ? undefined // Recurring activities don't have a specific date
+        : formatDateToISO(dayToDate(activity.day, weekOffset));
+      
       await createActivity({
         userId: user.uid,
         name: activity.name,
         day: activity.day,
+        activityDate,
         color: activity.color,
         isRecurring: activity.isRecurring,
         startTime: activity.startTime,
@@ -1220,17 +1373,11 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
         return;
       }
 
-      // Get current week's start and end dates
-      const today = new Date();
-      const dayOfWeek = today.getDay();
-      const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-      
-      const weekStart = new Date(today);
-      weekStart.setDate(today.getDate() + mondayOffset);
+      // Get the selected week's start and end dates based on weekOffset
+      const weekStart = dayToDate(DayOfWeek.Monday, weekOffset);
       weekStart.setHours(0, 0, 0, 0);
       
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekStart.getDate() + 7);
+      const weekEnd = dayToDate(DayOfWeek.Sunday, weekOffset);
       weekEnd.setHours(23, 59, 59, 999);
 
       // Fetch events from Google Calendar
@@ -1267,23 +1414,32 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
         const startTime = `${startDate.getHours().toString().padStart(2, '0')}:${startDate.getMinutes().toString().padStart(2, '0')}`;
         const endTime = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
         
-        // Check if this event already exists (by name, day, and time)
+        // Check if this event already exists (by external ID or name/time)
         const exists = activities.some(
-          (a) => a.name === event.title && a.day === day && a.startTime === startTime && a.endTime === endTime
+          (a) => a.externalId === event.id || 
+            (a.name === event.title && a.day === day && a.startTime === startTime && a.endTime === endTime)
         );
         
         if (exists) continue;
 
-        // Create the activity
+        // Get the activity date for this event
+        const activityDate = formatDateToISO(startDate);
+
+        // Create the activity with external tracking
         try {
           await createActivity({
             userId: user.uid,
             name: event.title,
             day,
+            activityDate,
             color: '#4285F4', // Google blue for imported events
             isRecurring: false,
             startTime,
             endTime,
+            description: event.description,
+            location: event.location,
+            externalId: event.id,
+            source: ActivitySource.Google,
           });
           importedCount++;
         } catch (err) {
@@ -1311,6 +1467,31 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
     }
   }, [importSuccess, importError]);
 
+  // Handle day press from monthly view - navigate to that day in weekly view
+  const handleMonthDayPress = (date: Date) => {
+    const todayMonday = dayToDate(DayOfWeek.Monday, 0);
+    const targetMonday = new Date(date);
+    const dayOfWeekNum = targetMonday.getDay();
+    const mondayOffset = dayOfWeekNum === 0 ? -6 : 1 - dayOfWeekNum;
+    targetMonday.setDate(date.getDate() + mondayOffset);
+    
+    const weekDiff = Math.round((targetMonday.getTime() - todayMonday.getTime()) / (7 * 24 * 60 * 60 * 1000));
+    setWeekOffset(weekDiff);
+    setViewMode('weekly');
+  };
+
+  // Toggle between weekly and monthly view
+  const handleToggleView = () => {
+    if (viewMode === 'weekly') {
+      const weekDate = dayToDate(DayOfWeek.Monday, weekOffset);
+      const today = new Date();
+      const monthDiff = (weekDate.getFullYear() - today.getFullYear()) * 12 + 
+                        (weekDate.getMonth() - today.getMonth());
+      setMonthOffset(monthDiff);
+    }
+    setViewMode(viewMode === 'weekly' ? 'monthly' : 'weekly');
+  };
+
   // Mobile expanded single day view
   if (isMobile && selectedDay) {
     return (
@@ -1320,7 +1501,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           isToday={selectedDay === currentDay}
           onBack={handleBack}
           onSignOut={onSignOut}
-          activities={activities.filter((a) => a.day === selectedDay)}
+          activities={getActivitiesForDay(activities, selectedDay, weekOffset)}
           onActivityClick={handleActivityClick}
         />
         <AddActivityModal
@@ -1342,6 +1523,42 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
   }
 
   // Mobile compact list view
+  // Mobile monthly view
+  if (isMobile && viewMode === 'monthly') {
+    return (
+      <>
+        <MonthlyCalendarView
+          activities={activities}
+          monthOffset={monthOffset}
+          onPrevMonth={() => setMonthOffset(prev => prev - 1)}
+          onNextMonth={() => setMonthOffset(prev => prev + 1)}
+          onGoToToday={() => setMonthOffset(0)}
+          onDayPress={handleMonthDayPress}
+          onActivityClick={handleActivityClick}
+          onToggleView={handleToggleView}
+          onAddActivity={() => setShowAddActivity(true)}
+          colors={colors}
+        />
+        <AddActivityModal
+          visible={showAddActivity}
+          onClose={() => setShowAddActivity(false)}
+          onSave={handleSaveActivity}
+          colors={colors}
+          mode="monthly"
+          monthOffset={monthOffset}
+        />
+        <EditActivityModal
+          visible={editingActivity !== null}
+          activity={editingActivity}
+          onClose={() => setEditingActivity(null)}
+          onSave={handleUpdateActivity}
+          onDelete={handleDeleteActivity}
+          colors={colors}
+        />
+      </>
+    );
+  }
+
   if (isMobile) {
     return (
       <>
@@ -1360,12 +1577,50 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           importSuccess={importSuccess}
           weekOffset={weekOffset}
           onWeekChange={setWeekOffset}
+          viewMode={viewMode}
+          onToggleView={handleToggleView}
         />
         <AddActivityModal
           visible={showAddActivity}
           onClose={() => setShowAddActivity(false)}
           onSave={handleSaveActivity}
           colors={colors}
+        />
+        <EditActivityModal
+          visible={editingActivity !== null}
+          activity={editingActivity}
+          onClose={() => setEditingActivity(null)}
+          onSave={handleUpdateActivity}
+          onDelete={handleDeleteActivity}
+          colors={colors}
+        />
+      </>
+    );
+  }
+
+  // Desktop view
+  if (viewMode === 'monthly') {
+    return (
+      <>
+        <MonthlyCalendarView
+          activities={activities}
+          monthOffset={monthOffset}
+          onPrevMonth={() => setMonthOffset(prev => prev - 1)}
+          onNextMonth={() => setMonthOffset(prev => prev + 1)}
+          onGoToToday={() => setMonthOffset(0)}
+          onDayPress={handleMonthDayPress}
+          onActivityClick={handleActivityClick}
+          onToggleView={handleToggleView}
+          onAddActivity={() => setShowAddActivity(true)}
+          colors={colors}
+        />
+        <AddActivityModal
+          visible={showAddActivity}
+          onClose={() => setShowAddActivity(false)}
+          onSave={handleSaveActivity}
+          colors={colors}
+          mode="monthly"
+          monthOffset={monthOffset}
         />
         <EditActivityModal
           visible={editingActivity !== null}
@@ -1398,6 +1653,8 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
         onPrevWeek={() => setWeekOffset(prev => prev - 1)}
         onNextWeek={() => setWeekOffset(prev => prev + 1)}
         onGoToToday={() => setWeekOffset(0)}
+        viewMode={viewMode}
+        onToggleView={handleToggleView}
       />
       <AddActivityModal
         visible={showAddActivity}
@@ -1435,9 +1692,11 @@ type MobileWeekListProps = {
   importSuccess?: number | null;
   weekOffset: number;
   onWeekChange: (offset: number) => void;
+  viewMode: 'weekly' | 'monthly';
+  onToggleView: () => void;
 };
 
-const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, activeTab, onTabChange, activities, onActivityClick, onImportGoogleCalendar, isImporting, importError, importSuccess, weekOffset, onWeekChange }: MobileWeekListProps) => {
+const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, activeTab, onTabChange, activities, onActivityClick, onImportGoogleCalendar, isImporting, importError, importSuccess, weekOffset, onWeekChange, viewMode, onToggleView }: MobileWeekListProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
   
@@ -1537,6 +1796,16 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, acti
                   <Text style={styles.todayButtonMobileText}>Today</Text>
                 </Pressable>
               )}
+              <Pressable
+                style={[styles.mobileViewToggle, { backgroundColor: colors.inputBackground }]}
+                onPress={onToggleView}
+              >
+                <Ionicons 
+                  name={viewMode === 'weekly' ? 'calendar-outline' : 'grid-outline'} 
+                  size={18} 
+                  color={colors.textSecondary} 
+                />
+              </Pressable>
             </View>
             {onSignOut && (
               <LogoutButton onPress={onSignOut} isMobile={true} colors={colors} />
@@ -1897,6 +2166,360 @@ const MobileDayExpanded = ({ day, isToday, onBack, activities, onActivityClick }
 };
 
 // ===========================================
+// MINI CALENDAR PICKER (for Add Activity Modal)
+// ===========================================
+type MiniCalendarPickerProps = {
+  selectedDate: Date | null;
+  onSelectDate: (date: Date) => void;
+  monthOffset: number;
+  onPrevMonth: () => void;
+  onNextMonth: () => void;
+  colors: any;
+};
+
+const MiniCalendarPicker = ({
+  selectedDate,
+  onSelectDate,
+  monthOffset,
+  onPrevMonth,
+  onNextMonth,
+  colors,
+}: MiniCalendarPickerProps) => {
+  const today = new Date();
+  const currentMonth = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1);
+  const monthName = currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  
+  // Get first day of the month and total days
+  const firstDayOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
+  const lastDayOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0);
+  const daysInMonth = lastDayOfMonth.getDate();
+  const startDay = firstDayOfMonth.getDay(); // 0 = Sunday
+  
+  // Create calendar grid
+  const weeks: (Date | null)[][] = [];
+  let currentWeek: (Date | null)[] = [];
+  
+  // Add empty cells for days before the first day of month
+  for (let i = 0; i < startDay; i++) {
+    currentWeek.push(null);
+  }
+  
+  // Add all days of the month
+  for (let day = 1; day <= daysInMonth; day++) {
+    const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day);
+    currentWeek.push(date);
+    
+    if (currentWeek.length === 7) {
+      weeks.push(currentWeek);
+      currentWeek = [];
+    }
+  }
+  
+  // Fill remaining cells of last week
+  while (currentWeek.length > 0 && currentWeek.length < 7) {
+    currentWeek.push(null);
+  }
+  if (currentWeek.length > 0) {
+    weeks.push(currentWeek);
+  }
+  
+  const isToday = (date: Date | null) => {
+    if (!date) return false;
+    return date.toDateString() === today.toDateString();
+  };
+  
+  const isSelected = (date: Date | null) => {
+    if (!date || !selectedDate) return false;
+    return date.toDateString() === selectedDate.toDateString();
+  };
+  
+  const dayNames = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+  
+  return (
+    <View style={miniCalStyles.container}>
+      {/* Month Navigation */}
+      <View style={miniCalStyles.header}>
+        <Pressable onPress={onPrevMonth} style={miniCalStyles.navButton}>
+          <Ionicons name="chevron-back" size={18} color={colors.textSecondary} />
+        </Pressable>
+        <Text style={[miniCalStyles.monthText, { color: colors.textPrimary }]}>{monthName}</Text>
+        <Pressable onPress={onNextMonth} style={miniCalStyles.navButton}>
+          <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
+        </Pressable>
+      </View>
+      
+      {/* Day Names Header */}
+      <View style={miniCalStyles.dayNamesRow}>
+        {dayNames.map((day, idx) => (
+          <Text key={idx} style={[miniCalStyles.dayName, { color: colors.textSecondary }]}>{day}</Text>
+        ))}
+      </View>
+      
+      {/* Calendar Grid */}
+      {weeks.map((week, weekIdx) => (
+        <View key={weekIdx} style={miniCalStyles.weekRow}>
+          {week.map((date, dayIdx) => (
+            <Pressable
+              key={dayIdx}
+              style={[
+                miniCalStyles.dayCell,
+                date && { backgroundColor: colors.inputBackground },
+                isToday(date) && { borderColor: colors.primary, borderWidth: 1 },
+                isSelected(date) && { backgroundColor: colors.primary },
+              ]}
+              onPress={() => date && onSelectDate(date)}
+              disabled={!date}
+            >
+              <Text
+                style={[
+                  miniCalStyles.dayText,
+                  { color: colors.textSecondary },
+                  isToday(date) && { color: colors.primary, fontWeight: '600' },
+                  isSelected(date) && { color: '#ffffff', fontWeight: '600' },
+                ]}
+              >
+                {date?.getDate() || ''}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      ))}
+      
+      {/* Selected Date Display */}
+      {selectedDate && (
+        <View style={[miniCalStyles.selectedDisplay, { backgroundColor: colors.inputBackground }]}>
+          <Text style={[miniCalStyles.selectedText, { color: colors.textPrimary }]}>
+            {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+};
+
+const miniCalStyles = StyleSheet.create({
+  container: {
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  navButton: {
+    padding: 4,
+  },
+  monthText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  dayNamesRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingVertical: 6,
+  },
+  dayName: {
+    fontSize: 11,
+    fontWeight: '500',
+    width: 32,
+    textAlign: 'center',
+  },
+  weekRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingVertical: 2,
+  },
+  dayCell: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  dayText: {
+    fontSize: 13,
+  },
+  selectedDisplay: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  selectedText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+});
+
+// ===========================================
+// MONTHLY CALENDAR VIEW
+// ===========================================
+type MonthlyCalendarViewProps = {
+  activities: Activity[];
+  monthOffset: number;
+  onPrevMonth: () => void;
+  onNextMonth: () => void;
+  onGoToToday: () => void;
+  onDayPress: (date: Date) => void;
+  onActivityClick?: (activity: Activity) => void;
+  onToggleView: () => void;
+  onAddActivity: () => void;
+  colors: any;
+};
+
+const MonthlyCalendarView = ({
+  activities,
+  monthOffset,
+  onPrevMonth,
+  onNextMonth,
+  onGoToToday,
+  onDayPress,
+  onActivityClick,
+  onToggleView,
+  onAddActivity,
+  colors,
+}: MonthlyCalendarViewProps) => {
+  const grid = getMonthGrid(monthOffset);
+  const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  
+  // Get activities for a specific date
+  const getActivitiesForDate = (date: Date) => {
+    const dateStr = formatDateToISO(date);
+    const dayOfWeek = dateToDayOfWeek(date);
+    
+    return activities.filter(activity => {
+      if (activity.activityDate) {
+        return activity.activityDate === dateStr;
+      }
+      if (activity.isRecurring) {
+        return activity.day === dayOfWeek;
+      }
+      return false;
+    });
+  };
+  
+  return (
+    <View style={[styles.monthlyContainer, { backgroundColor: colors.background }]}>
+      {/* Header */}
+      <View style={[styles.monthlyHeader, { backgroundColor: colors.card }]}>
+        <View style={styles.monthlyHeaderContent}>
+          <View style={styles.weekNavContainer}>
+            <WeekNavButton direction="prev" onPress={onPrevMonth} colors={colors} />
+            <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
+              {getMonthDateRange(monthOffset)}
+            </Text>
+            <WeekNavButton direction="next" onPress={onNextMonth} colors={colors} />
+            {monthOffset !== 0 && (
+              <Pressable
+                style={[styles.todayButton, { backgroundColor: colors.primary + '20' }]}
+                onPress={onGoToToday}
+              >
+                <Text style={[styles.todayButtonText, { color: colors.primary }]}>Today</Text>
+              </Pressable>
+            )}
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <AddActivityButton onPress={onAddActivity} colors={colors} />
+            <ViewToggleButton viewMode="monthly" onToggle={onToggleView} colors={colors} />
+          </View>
+        </View>
+      </View>
+      
+      {/* Week day headers */}
+      <View style={[styles.monthlyWeekHeader, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+        {weekDays.map((day, index) => (
+          <View key={day} style={styles.monthlyWeekDay}>
+            <Text style={[
+              styles.monthlyWeekDayText,
+              { color: index >= 5 ? colors.textSecondary : colors.textPrimary }
+            ]}>
+              {day}
+            </Text>
+          </View>
+        ))}
+      </View>
+      
+      {/* Calendar grid */}
+      <ScrollView style={styles.monthlyGrid} showsVerticalScrollIndicator={false}>
+        <View style={styles.monthlyGridInner}>
+          {Array.from({ length: 6 }, (_, weekIndex) => (
+            <View key={weekIndex} style={styles.monthlyWeekRow}>
+              {grid.slice(weekIndex * 7, (weekIndex + 1) * 7).map((day, dayIndex) => {
+                const dayActivities = getActivitiesForDate(day.date);
+                const isWeekend = dayIndex >= 5;
+                
+                return (
+                  <Pressable
+                    key={dayIndex}
+                    style={[
+                      styles.monthlyDayCell,
+                      { 
+                        backgroundColor: day.isToday 
+                          ? colors.primary + '15' 
+                          : colors.card,
+                        borderColor: day.isToday ? colors.primary : colors.border,
+                      },
+                      !day.isCurrentMonth && { opacity: 0.4 },
+                    ]}
+                    onPress={() => onDayPress(day.date)}
+                  >
+                    <Text style={[
+                      styles.monthlyDayNumber,
+                      { 
+                        color: day.isToday 
+                          ? colors.primary 
+                          : isWeekend 
+                            ? colors.textSecondary 
+                            : colors.textPrimary 
+                      },
+                      day.isToday && { fontWeight: '700' },
+                    ]}>
+                      {day.date.getDate()}
+                    </Text>
+                    
+                    {/* Activity indicators */}
+                    <View style={styles.monthlyActivityIndicators}>
+                      {dayActivities.slice(0, 3).map((activity, i) => (
+                        <Pressable
+                          key={activity.id}
+                          style={[
+                            styles.monthlyActivityDot,
+                            { backgroundColor: activity.color }
+                          ]}
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            onActivityClick?.(activity);
+                          }}
+                        >
+                          <Text 
+                            style={styles.monthlyActivityDotText} 
+                            numberOfLines={1}
+                          >
+                            {activity.name}
+                          </Text>
+                        </Pressable>
+                      ))}
+                      {dayActivities.length > 3 && (
+                        <Text style={[styles.monthlyMoreText, { color: colors.textSecondary }]}>
+                          +{dayActivities.length - 3} more
+                        </Text>
+                      )}
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ))}
+        </View>
+      </ScrollView>
+    </View>
+  );
+};
+
+// ===========================================
 // DESKTOP: Horizontal Grid (columns)
 // ===========================================
 type DesktopWeekGridProps = {
@@ -1915,6 +2538,8 @@ type DesktopWeekGridProps = {
   onPrevWeek: () => void;
   onNextWeek: () => void;
   onGoToToday: () => void;
+  viewMode: 'weekly' | 'monthly';
+  onToggleView: () => void;
 };
 
 // Generate time slots from 12am to 11pm (full 24 hours)
@@ -1927,7 +2552,7 @@ const TIME_SLOTS = Array.from({ length: 24 }, (_, i) => {
 
 const HOUR_HEIGHT = 50; // Height of each hour slot in pixels
 
-const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onActivityClick, showActivitiesPanel, onToggleActivitiesPanel, onImportGoogleCalendar, isImporting, importError, importSuccess, weekOffset, onPrevWeek, onNextWeek, onGoToToday }: DesktopWeekGridProps) => {
+const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onActivityClick, showActivitiesPanel, onToggleActivitiesPanel, onImportGoogleCalendar, isImporting, importError, importSuccess, weekOffset, onPrevWeek, onNextWeek, onGoToToday, viewMode, onToggleView }: DesktopWeekGridProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
   const scrollRef = useWeeklyGridScrollbar();
@@ -1956,6 +2581,7 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onA
                 <Text style={[styles.todayButtonText, { color: colors.primary }]}>Today</Text>
               </Pressable>
             )}
+            <ViewToggleButton viewMode={viewMode} onToggle={onToggleView} colors={colors} />
           </View>
           <View style={styles.headerActions}>
             {/* Import status messages */}
@@ -2069,7 +2695,7 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onA
           <View style={[styles.dayColumnsWrapper, { gap: GAP }]}>
             {dayOrder.map((day, index) => {
               const isToday = isDayToday(index, weekOffset);
-              const dayActivities = activities.filter((a) => a.day === day);
+              const dayActivities = getActivitiesForDay(activities, day, weekOffset);
               // Grid starts at 12 AM (hour 0)
               const GRID_START_HOUR = 0;
               return (
@@ -2164,8 +2790,13 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onA
         // Count recurring activities
         const recurringCount = activities.filter((a) => a.isRecurring).length;
 
-        // Count today's activities
-        const todayCount = activities.filter((a) => a.day === currentDay).length;
+        // Count today's activities (use date-based filtering)
+        const todayDate = formatDateToISO(new Date());
+        const todayCount = activities.filter((a) => {
+          if (a.activityDate) return a.activityDate === todayDate;
+          if (a.isRecurring) return a.day === currentDay;
+          return a.day === currentDay;
+        }).length;
 
         return (
           <View style={[styles.statsBar, { backgroundColor: colors.card }]}>
@@ -2309,6 +2940,98 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 12,
     marginLeft: 4,
+  },
+  // View toggle button styles
+  viewToggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginLeft: 12,
+  },
+  viewToggleText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  // Monthly calendar styles
+  monthlyContainer: {
+    flex: 1,
+  },
+  monthlyHeader: {
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+  },
+  monthlyHeaderContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  monthlyWeekHeader: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+  },
+  monthlyWeekDay: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  monthlyWeekDayText: {
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+  },
+  monthlyGrid: {
+    flex: 1,
+    paddingHorizontal: 8,
+  },
+  monthlyGridInner: {
+    paddingVertical: 8,
+  },
+  monthlyWeekRow: {
+    flexDirection: 'row',
+    marginBottom: 4,
+  },
+  monthlyDayCell: {
+    flex: 1,
+    minHeight: 100,
+    margin: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 6,
+  },
+  monthlyDayNumber: {
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 4,
+  },
+  monthlyActivityIndicators: {
+    flex: 1,
+    gap: 2,
+  },
+  monthlyActivityDot: {
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  monthlyActivityDotText: {
+    fontSize: 10,
+    fontWeight: '500',
+    color: '#ffffff',
+  },
+  monthlyMoreText: {
+    fontSize: 10,
+    marginTop: 2,
+  },
+  mobileViewToggle: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
   },
   todayButtonMobileText: {
     fontSize: 12,
