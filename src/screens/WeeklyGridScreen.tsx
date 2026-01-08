@@ -2404,7 +2404,11 @@ const MonthlyCalendarView = ({
   return (
     <View style={[styles.monthlyContainer, { backgroundColor: colors.background }]}>
       {/* Header */}
-      <View style={[styles.monthlyHeader, { backgroundColor: colors.card }]}>
+      <View style={[
+        styles.monthlyHeader, 
+        { backgroundColor: colors.card },
+        Platform.OS !== 'web' && { paddingTop: 50 }
+      ]}>
         <View style={styles.monthlyHeaderContent}>
           <View style={styles.weekNavContainer}>
             <WeekNavButton direction="prev" onPress={onPrevMonth} colors={colors} />
