@@ -13,7 +13,7 @@ import {
   View,
 } from 'react-native';
 
-import { OAuthProvider } from '@/services/authService';
+import { OAuthProvider } from '@/services/auth/authService';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useTheme } from '@/store/useThemeStore';
 

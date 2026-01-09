@@ -72,6 +72,23 @@ ChronoPal/
 │   ├── lib/                # External service clients (Supabase)
 │   ├── screens/            # Screen components
 │   ├── services/           # API and business logic
+│   │   ├── ai/             # AI services (Gemini integration)
+│   │   │   ├── geminiClient.ts    # Gemini API client
+│   │   │   ├── plannerService.ts   # Schedule generation logic
+│   │   │   ├── prompts.ts          # AI prompt templates
+│   │   │   └── index.ts            # Public API exports
+│   │   ├── auth/           # Authentication services
+│   │   │   ├── authService.ts     # Auth logic (email, OAuth)
+│   │   │   └── index.ts            # Public API exports
+│   │   ├── database/       # Database services (Supabase)
+│   │   │   ├── activityService.ts  # Activity CRUD operations
+│   │   │   ├── categoryService.ts  # Category management
+│   │   │   ├── exceptionService.ts # Recurrence exceptions
+│   │   │   ├── reminderService.ts   # Reminder management
+│   │   │   └── index.ts            # Public API exports
+│   │   └── integrations/   # External integrations
+│   │       ├── calendarService.ts  # Google Calendar integration
+│   │       └── index.ts            # Public API exports
 │   ├── store/              # Zustand state management
 │   ├── theme/              # Theme colors and styles
 │   ├── types/              # TypeScript type definitions

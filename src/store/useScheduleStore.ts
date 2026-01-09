@@ -6,7 +6,7 @@ import {
   removeActivity as deleteActivity,
   subscribeToActivities,
   updateActivity as persistActivity,
-} from '@/services/activityService';
+} from '@/services/database/activityService';
 import {
   Activity,
   ActivityId,

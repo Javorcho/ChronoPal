@@ -7,7 +7,7 @@ import {
   formatDateToISO,
   dayToDate,
 } from '@/types/schedule';
-import { buildSchedulePrompt, buildFullPrompt } from './aiPrompts';
+import { buildSchedulePrompt, buildFullPrompt } from './prompts';
 import { callGeminiAPI, isGeminiAPIConfigured } from './geminiClient';
 
 /**

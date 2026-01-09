@@ -18,11 +18,11 @@ import {
 import { useTheme } from '@/store/useThemeStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { Activity, dayNames, DayOfWeek, dayOrder, formatDateToISO, dayToDate, dateToDayOfWeek, ActivitySource } from '@/types/schedule';
-import { subscribeToActivities, createActivity, updateActivity, removeActivity, getActivitiesForDay, fetchExceptionsForDateRange, clearExceptionsCache } from '@/services/activityService';
-import { fetchGoogleCalendarEvents } from '@/services/calendarService';
-import { getSessionWithToken } from '@/services/authService';
-import { createExceptionsForWeeks } from '@/services/exceptionService';
-import { generateSchedule, validateSchedule } from '@/services/aiPlannerService';
+import { subscribeToActivities, createActivity, updateActivity, removeActivity, getActivitiesForDay, fetchExceptionsForDateRange, clearExceptionsCache } from '@/services/database/activityService';
+import { fetchGoogleCalendarEvents } from '@/services/integrations/calendarService';
+import { getSessionWithToken } from '@/services/auth/authService';
+import { createExceptionsForWeeks } from '@/services/database/exceptionService';
+import { generateSchedule, validateSchedule } from '@/services/ai/plannerService';
 import { ActivityInput } from '@/types/schedule';
 
 // Activity colors palette
@@ -558,10 +558,12 @@ type AddActivityModalProps = {
     startTime: string;
     endTime: string;
     activityDate?: string; // YYYY-MM-DD for specific date
+    weekOffset?: number; // Week offset for non-recurring activities
   }) => Promise<string | null>; // Returns error message or null on success
   colors: any;
   mode?: 'weekly' | 'monthly'; // Selection mode
   monthOffset?: number; // For monthly mode date picker
+  weekOffset?: number; // Initial week offset
 };
 
 // Helper to parse time string (HH:MM) to minutes from midnight
@@ -589,7 +591,7 @@ const formatTimeInput = (text: string): string => {
   return `${digits.slice(0, 2)}:${digits.slice(2, 4)}`;
 };
 
-const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', monthOffset = 0 }: AddActivityModalProps) => {
+const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', monthOffset = 0, weekOffset: initialWeekOffset = 0 }: AddActivityModalProps) => {
   const [name, setName] = useState('');
   const [selectedDays, setSelectedDays] = useState<Set<DayOfWeek>>(new Set([DayOfWeek.Monday]));
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -600,11 +602,20 @@ const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', m
   const [timeError, setTimeError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [datePickerMonth, setDatePickerMonth] = useState(monthOffset);
+  const [weekOffset, setWeekOffset] = useState(initialWeekOffset);
+
+  // Reset weekOffset when modal opens
+  useEffect(() => {
+    if (visible) {
+      setWeekOffset(initialWeekOffset);
+    }
+  }, [visible, initialWeekOffset]);
 
   const reset = () => {
     setName('');
     setSelectedDate(null);
     setDatePickerMonth(monthOffset);
+    setWeekOffset(initialWeekOffset);
     setSelectedDays(new Set([DayOfWeek.Monday]));
     setSelectedColor(ACTIVITY_COLORS[0]);
     setIsRecurring(false);
@@ -698,6 +709,7 @@ const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', m
       isRecurring,
       startTime,
       endTime,
+      weekOffset: isRecurring ? undefined : weekOffset, // Only pass weekOffset for non-recurring activities
     });
     
     if (error) {
@@ -758,6 +770,31 @@ const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', m
             {mode === 'weekly' ? (
               <View style={styles.formGroup}>
                 <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Days</Text>
+                
+                {/* Week Navigation */}
+                <View style={[styles.weekNavContainerModal, { marginBottom: 12 }]}>
+                  <Pressable
+                    style={[styles.weekNavButtonModal, { backgroundColor: colors.inputBackground }]}
+                    onPress={() => setWeekOffset(prev => Math.max(0, prev - 1))}
+                    disabled={weekOffset === 0}
+                  >
+                    <Ionicons 
+                      name="chevron-back" 
+                      size={18} 
+                      color={weekOffset === 0 ? colors.placeholder : colors.textSecondary} 
+                    />
+                  </Pressable>
+                  <Text style={[styles.weekNavTextModal, { color: colors.textPrimary }]}>
+                    {getWeekDateRange(weekOffset)}
+                  </Text>
+                  <Pressable
+                    style={[styles.weekNavButtonModal, { backgroundColor: colors.inputBackground }]}
+                    onPress={() => setWeekOffset(prev => prev + 1)}
+                  >
+                    <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
+                  </Pressable>
+                </View>
+                
                 <Text style={[styles.toggleHint, { color: colors.placeholder, marginBottom: 8 }]}>
                   Select one or more days
                 </Text>
@@ -1724,13 +1761,33 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
   const checkTimeConflict = (
     day: DayOfWeek,
     startTime: string,
-    endTime: string
+    endTime: string,
+    weekOffsetToCheck?: number
   ): string | null => {
     const newStart = parseTime(startTime);
     const newEnd = parseTime(endTime);
     if (newStart === null || newEnd === null) return null;
 
-    const dayActivities = activities.filter((a) => a.day === day);
+    // Use provided weekOffset or default to current weekOffset
+    const checkWeekOffset = weekOffsetToCheck !== undefined ? weekOffsetToCheck : weekOffset;
+    const targetDate = formatDateToISO(dayToDate(day, checkWeekOffset));
+
+    // Filter activities for the specific day and week
+    const dayActivities = activities.filter((a) => {
+      // Must match the day
+      if (a.day !== day) return false;
+      
+      // For recurring activities, they apply to all weeks, so include them
+      if (a.isRecurring) return true;
+      
+      // For non-recurring activities, check if they're in the same week
+      if (a.activityDate) {
+        return a.activityDate === targetDate;
+      }
+      
+      // If no activityDate, it's a recurring activity (shouldn't happen, but be safe)
+      return false;
+    });
     
     for (const existing of dayActivities) {
       const existingStart = parseTime(existing.startTime);
@@ -1755,6 +1812,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
     startTime: string;
     endTime: string;
     activityDate?: string;
+    weekOffset?: number; // Week offset for non-recurring activities
   }): Promise<string | null> => {
     if (!user?.uid) return 'Not logged in';
 
@@ -1765,8 +1823,10 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
     }
 
     // Check for time conflicts on all selected days
+    // Use the weekOffset from activity if provided, otherwise use the current weekOffset
+    const activityWeekOffset = activity.weekOffset !== undefined ? activity.weekOffset : weekOffset;
     for (const day of daysToCreate) {
-      const conflict = checkTimeConflict(day, activity.startTime, activity.endTime);
+      const conflict = checkTimeConflict(day, activity.startTime, activity.endTime, activityWeekOffset);
       if (conflict) {
         return conflict;
       }
@@ -1775,9 +1835,11 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
     try {
       // Create an activity for each selected day
       for (const day of daysToCreate) {
+        // Use the weekOffset from activity if provided, otherwise use the current weekOffset
+        const activityWeekOffset = activity.weekOffset !== undefined ? activity.weekOffset : weekOffset;
         const activityDate = activity.activityDate || (activity.isRecurring 
           ? undefined // Recurring activities don't have a specific date
-          : formatDateToISO(dayToDate(day, weekOffset)));
+          : formatDateToISO(dayToDate(day, activityWeekOffset)));
         
         await createActivity({
           userId: user.uid,
@@ -2069,6 +2131,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           onClose={() => setShowAddActivity(false)}
           onSave={handleSaveActivity}
           colors={colors}
+          weekOffset={weekOffset}
         />
         <EditActivityModal
           visible={editingActivity !== null}
@@ -2178,6 +2241,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           onClose={() => setShowAddActivity(false)}
           onSave={handleSaveActivity}
           colors={colors}
+          weekOffset={weekOffset}
         />
         <EditActivityModal
           visible={editingActivity !== null}
@@ -3517,7 +3581,9 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, onOpenAIPlanner
           const start = parseTime(a.startTime);
           const end = parseTime(a.endTime);
           if (start !== null && end !== null) {
-            return sum + (end - start);
+            // Handle activities that span midnight (e.g., 23:00 to 00:00)
+            const duration = end >= start ? (end - start) : (end + 24 * 60 - start);
+            return sum + duration;
           }
           return sum;
         }, 0);
@@ -4862,6 +4928,26 @@ const styles = StyleSheet.create({
   statDivider: {
     width: 1,
     height: 32,
+  },
+  weekNavContainerModal: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    paddingVertical: 8,
+  },
+  weekNavButtonModal: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+  },
+  weekNavTextModal: {
+    fontSize: 14,
+    fontWeight: '600',
+    minWidth: 120,
+    textAlign: 'center',
   },
 });
 
