@@ -22,6 +22,8 @@ import { subscribeToActivities, createActivity, updateActivity, removeActivity, 
 import { fetchGoogleCalendarEvents } from '@/services/calendarService';
 import { getSessionWithToken } from '@/services/authService';
 import { createExceptionsForWeeks } from '@/services/exceptionService';
+import { generateSchedule, validateSchedule } from '@/services/aiPlannerService';
+import { ActivityInput } from '@/types/schedule';
 
 // Activity colors palette
 const ACTIVITY_COLORS = [
@@ -295,6 +297,40 @@ const MyActivitiesButton = ({ onPress, isActive, colors }: MyActivitiesButtonPro
   );
 };
 
+// AI Helper button with hover effect
+type AIHelperButtonProps = {
+  onPress: () => void;
+  colors: any;
+};
+
+const AIHelperButton = ({ onPress, colors }: AIHelperButtonProps) => {
+  const [isHovered, setIsHovered] = useState(false);
+  
+  return (
+    <Pressable
+      style={[
+        styles.aiHelperButton, 
+        { 
+          backgroundColor: isHovered ? colors.primary + '20' : colors.inputBackground,
+          borderWidth: isHovered ? 1 : 0,
+          borderColor: colors.primary,
+        }
+      ]}
+      onPress={onPress}
+      onHoverIn={() => setIsHovered(true)}
+      onHoverOut={() => setIsHovered(false)}
+    >
+      <Ionicons name="sparkles" size={18} color={isHovered ? colors.primary : colors.textSecondary} />
+      <Text style={[
+        styles.aiHelperButtonText, 
+        { color: isHovered ? colors.primary : colors.textSecondary }
+      ]}>
+        AI Helper
+      </Text>
+    </Pressable>
+  );
+};
+
 // Add Activity button with hover effect
 type AddActivityButtonProps = {
   onPress: () => void;
@@ -515,7 +551,8 @@ type AddActivityModalProps = {
   onClose: () => void;
   onSave: (activity: {
     name: string;
-    day: DayOfWeek;
+    day?: DayOfWeek;
+    days?: DayOfWeek[]; // For multiple days selection
     color: string;
     isRecurring: boolean;
     startTime: string;
@@ -886,7 +923,7 @@ type EditActivityModalProps = {
   visible: boolean;
   activity: Activity | null;
   onClose: () => void;
-  onSave: (activity: Activity) => Promise<string | null>;
+  onSave: (activity: Activity & { days?: DayOfWeek[] }) => Promise<string | null>;
   onDelete: (activityId: string) => Promise<void>;
   colors: any;
   weekOffset?: number;
@@ -1278,6 +1315,254 @@ const EditActivityModal = ({ visible, activity, onClose, onSave, onDelete, color
   );
 };
 
+// AI Planner Modal
+type AIPlannerModalProps = {
+  visible: boolean;
+  onClose: () => void;
+  onApprove: (activities: ActivityInput[]) => Promise<void>;
+  recurringActivities: Activity[];
+  weekStart: Date;
+  colors: any;
+  userId: string;
+};
+
+const AIPlannerModal = ({ visible, onClose, onApprove, recurringActivities, weekStart, colors, userId }: AIPlannerModalProps) => {
+  const [prompt, setPrompt] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedActivities, setGeneratedActivities] = useState<ActivityInput[]>([]);
+  const [validationResult, setValidationResult] = useState<{ valid: boolean; conflicts: string[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isGenerateHovered, setIsGenerateHovered] = useState(false);
+  const [isApproveHovered, setIsApproveHovered] = useState(false);
+
+  const handleGenerate = async () => {
+    if (!prompt.trim()) {
+      setError('Please enter a schedule request');
+      return;
+    }
+
+    setIsGenerating(true);
+    setError(null);
+    setGeneratedActivities([]);
+    setValidationResult(null);
+
+    try {
+      const activities = await generateSchedule(prompt, recurringActivities, weekStart, userId);
+      
+      setGeneratedActivities(activities);
+      
+      // Validate against recurring activities
+      const validation = validateSchedule(activities, recurringActivities);
+      setValidationResult(validation);
+    } catch (err) {
+      console.error('Failed to generate schedule:', err);
+      setError('Failed to generate schedule. Please try again.');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleApprove = async () => {
+    if (generatedActivities.length === 0) return;
+    
+    try {
+      await onApprove(generatedActivities);
+      handleClose();
+    } catch (err) {
+      console.error('Failed to approve schedule:', err);
+      setError('Failed to create activities. Please try again.');
+    }
+  };
+
+  const handleClose = () => {
+    setPrompt('');
+    setGeneratedActivities([]);
+    setValidationResult(null);
+    setError(null);
+    onClose();
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
+      <View style={styles.modalOverlay}>
+        <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+          <View style={styles.modalHeader}>
+            <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>AI Schedule Planner</Text>
+            <Pressable onPress={handleClose} style={styles.modalCloseButton}>
+              <Ionicons name="close" size={24} color={colors.textSecondary} />
+            </Pressable>
+          </View>
+
+          <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+            <View style={styles.formGroup}>
+              <Text style={[styles.formLabel, { color: colors.textSecondary }]}>
+                Describe your schedule for this week
+              </Text>
+              <Text style={[styles.toggleHint, { color: colors.placeholder, marginBottom: 8 }]}>
+                Example: "Gym at 6am every day" or "Meetings 9-11am weekdays"
+              </Text>
+              <TextInput
+                style={[
+                  styles.formInput,
+                  {
+                    backgroundColor: colors.inputBackground,
+                    borderColor: colors.inputBorder,
+                    color: colors.textPrimary,
+                    minHeight: 100,
+                    textAlignVertical: 'top',
+                    paddingTop: 12,
+                  },
+                ]}
+                placeholder="I want to go to the gym at 6am every weekday..."
+                placeholderTextColor={colors.placeholder}
+                value={prompt}
+                onChangeText={setPrompt}
+                multiline
+                numberOfLines={4}
+              />
+            </View>
+
+            <Pressable
+              style={[
+                styles.modalButton,
+                styles.modalButtonSave,
+                {
+                  backgroundColor: prompt.trim() && !isGenerating 
+                    ? (isGenerateHovered ? colors.primary + 'DD' : colors.primary)
+                    : colors.inputBackground,
+                  opacity: isGenerating ? 0.7 : 1,
+                  borderWidth: isGenerateHovered && prompt.trim() && !isGenerating ? 1 : 0,
+                  borderColor: colors.primary,
+                },
+              ]}
+              onPress={handleGenerate}
+              onHoverIn={() => setIsGenerateHovered(true)}
+              onHoverOut={() => setIsGenerateHovered(false)}
+              disabled={!prompt.trim() || isGenerating}
+            >
+              <Ionicons 
+                name={isGenerating ? "hourglass" : "sparkles"} 
+                size={18} 
+                color={prompt.trim() && !isGenerating ? '#ffffff' : colors.placeholder} 
+              />
+              <Text style={[
+                styles.modalButtonText, 
+                { color: prompt.trim() && !isGenerating ? '#ffffff' : colors.placeholder }
+              ]}>
+                {isGenerating ? 'Generating...' : 'Generate Schedule'}
+              </Text>
+            </Pressable>
+
+            {error && (
+              <View style={[styles.errorMessage, { backgroundColor: (colors.error || '#EF4444') + '15' }]}>
+                <Ionicons name="alert-circle" size={16} color={colors.error || '#EF4444'} />
+                <Text style={[styles.errorText, { color: colors.error || '#EF4444' }]}>{error}</Text>
+              </View>
+            )}
+
+            {validationResult && !validationResult.valid && (
+              <View style={[styles.errorMessage, { backgroundColor: (colors.error || '#EF4444') + '15' }]}>
+                <Ionicons name="warning" size={16} color={colors.error || '#EF4444'} />
+                <Text style={[styles.errorText, { color: colors.error || '#EF4444' }]}>
+                  Conflicts detected:
+                </Text>
+                {validationResult.conflicts.map((conflict, idx) => (
+                  <Text key={idx} style={[styles.errorText, { color: colors.error || '#EF4444', marginTop: 4 }]}>
+                    • {conflict}
+                  </Text>
+                ))}
+              </View>
+            )}
+
+            {generatedActivities.length > 0 && (
+              <View style={styles.formGroup}>
+                <Text style={[styles.formLabel, { color: colors.textSecondary, marginBottom: 12 }]}>
+                  Generated Schedule Preview
+                </Text>
+                {recurringActivities.length > 0 && (
+                  <View style={[styles.recurringActivitiesInfo, { backgroundColor: colors.inputBackground + '80' }]}>
+                    <Ionicons name="information-circle" size={16} color={colors.primary} />
+                    <Text style={[styles.toggleHint, { color: colors.textSecondary, marginLeft: 8 }]}>
+                      Your existing recurring activities will be preserved
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.previewActivities}>
+                  {dayOrder.map((day) => {
+                    const dayActivities = generatedActivities.filter(a => a.day === day);
+                    if (dayActivities.length === 0) return null;
+                    
+                    return (
+                      <View key={day} style={styles.previewDayGroup}>
+                        <View style={[styles.previewDayHeader, { backgroundColor: colors.inputBackground }]}>
+                          <Text style={[styles.previewDayName, { color: colors.textPrimary }]}>
+                            {dayNames[day]}
+                          </Text>
+                          <Text style={[styles.previewDayCount, { color: colors.textSecondary }]}>
+                            {dayActivities.length} {dayActivities.length === 1 ? 'activity' : 'activities'}
+                          </Text>
+                        </View>
+                        {dayActivities.map((activity, idx) => (
+                          <View key={idx} style={[styles.previewActivityItem, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
+                            <View style={[styles.previewActivityColorBar, { backgroundColor: activity.color }]} />
+                            <View style={styles.previewActivityInfo}>
+                              <Text style={[styles.previewActivityName, { color: colors.textPrimary }]}>
+                                {activity.name}
+                              </Text>
+                              <Text style={[styles.previewActivityMeta, { color: colors.textSecondary }]}>
+                                {activity.startTime} - {activity.endTime}
+                                {activity.isRecurring && ' • Recurring'}
+                              </Text>
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
+          </ScrollView>
+
+          <View style={styles.modalFooter}>
+            <Pressable
+              style={[styles.modalButton, styles.modalButtonCancel, { backgroundColor: colors.inputBackground }]}
+              onPress={handleClose}
+            >
+              <Text style={[styles.modalButtonText, { color: colors.textSecondary }]}>Cancel</Text>
+            </Pressable>
+            <Pressable
+              style={[
+                styles.modalButton,
+                styles.modalButtonSave,
+                {
+                  backgroundColor: generatedActivities.length > 0 && validationResult?.valid
+                    ? (isApproveHovered ? colors.primary + 'DD' : colors.primary)
+                    : colors.inputBackground,
+                  opacity: generatedActivities.length > 0 && validationResult?.valid ? 1 : 0.7,
+                  borderWidth: isApproveHovered && generatedActivities.length > 0 && validationResult?.valid ? 1 : 0,
+                  borderColor: colors.primary,
+                },
+              ]}
+              onPress={handleApprove}
+              onHoverIn={() => setIsApproveHovered(true)}
+              onHoverOut={() => setIsApproveHovered(false)}
+              disabled={generatedActivities.length === 0 || !validationResult?.valid}
+            >
+              <Text style={[
+                styles.modalButtonText,
+                { color: generatedActivities.length > 0 && validationResult?.valid ? '#ffffff' : colors.placeholder }
+              ]}>
+                Approve & Apply
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
 export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
@@ -1293,7 +1578,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
   const [selectedDay, setSelectedDay] = useState<DayOfWeek | null>(null);
   
   // Mobile navigation tab state
-  const [mobileActiveTab, setMobileActiveTab] = useState<'calendar' | 'add'>('calendar');
+  const [mobileActiveTab, setMobileActiveTab] = useState<'calendar' | 'add' | 'ai'>('calendar');
   
   // Add activity modal state
   const [showAddActivity, setShowAddActivity] = useState(false);
@@ -1317,6 +1602,9 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
   
   // Month navigation state (for monthly view)
   const [monthOffset, setMonthOffset] = useState(0);
+  
+  // AI Planner state
+  const [showAIPlanner, setShowAIPlanner] = useState(false);
 
   // Subscribe to activities from Supabase and fetch exceptions
   useEffect(() => {
@@ -1385,6 +1673,53 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
     setShowAddActivity(true);
   };
 
+  // Handle AI planner
+  const handleOpenAIPlanner = () => {
+    setShowAIPlanner(true);
+  };
+
+  // Handle approve AI-generated activities
+  const handleApproveAISchedule = async (generatedActivities: ActivityInput[]) => {
+    if (!user?.uid) return;
+
+    try {
+      // Create all generated activities
+      for (const activity of generatedActivities) {
+        // Check for conflicts before creating
+        const conflict = checkTimeConflict(activity.day, activity.startTime, activity.endTime);
+        if (conflict) {
+          console.warn(`Skipping activity due to conflict: ${conflict}`);
+          continue;
+        }
+
+        const activityDate = activity.isRecurring 
+          ? undefined 
+          : formatDateToISO(dayToDate(activity.day, weekOffset));
+
+        await createActivity({
+          ...activity,
+          userId: user.uid,
+          activityDate,
+        });
+      }
+      // Activities will update automatically via subscription
+    } catch (error) {
+      console.error('Failed to create AI-generated activities:', error);
+      throw error;
+    }
+  };
+
+  // Get recurring activities for current week
+  const getRecurringActivities = (): Activity[] => {
+    return activities.filter(a => a.isRecurring);
+  };
+
+  // Get week start date
+  const getWeekStartDate = (): Date => {
+    const weekDates = dayOrder.map(day => dayToDate(day, weekOffset));
+    return weekDates[0];
+  };
+  
   // Check if new activity overlaps with existing ones
   const checkTimeConflict = (
     day: DayOfWeek,
@@ -1414,7 +1749,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
   const handleSaveActivity = async (activity: {
     name: string;
     day?: DayOfWeek;
-    days?: DayOfWeek[];
+    days?: DayOfWeek[]; // For multiple days selection
     color: string;
     isRecurring: boolean;
     startTime: string;
@@ -1467,9 +1802,14 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
   };
   
   // Handle tab change
-  const handleTabChange = (tab: 'calendar' | 'add') => {
+  const handleTabChange = (tab: 'calendar' | 'add' | 'ai') => {
     setMobileActiveTab(tab);
     if (tab === 'calendar') {
+      setShowAddActivity(false);
+      setShowAIPlanner(false);
+    } else if (tab === 'add') {
+      setShowAIPlanner(false);
+    } else if (tab === 'ai') {
       setShowAddActivity(false);
     }
   };
@@ -1745,6 +2085,15 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
             setCancelledDates(exceptions);
           }}
         />
+        <AIPlannerModal
+          visible={showAIPlanner}
+          onClose={() => setShowAIPlanner(false)}
+          onApprove={handleApproveAISchedule}
+          recurringActivities={getRecurringActivities()}
+          weekStart={getWeekStartDate()}
+          colors={colors}
+          userId={user?.uid || ''}
+        />
       </>
     );
   }
@@ -1789,6 +2138,15 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
             setCancelledDates(exceptions);
           }}
         />
+        <AIPlannerModal
+          visible={showAIPlanner}
+          onClose={() => setShowAIPlanner(false)}
+          onApprove={handleApproveAISchedule}
+          recurringActivities={getRecurringActivities()}
+          weekStart={getWeekStartDate()}
+          colors={colors}
+          userId={user?.uid || ''}
+        />
       </>
     );
   }
@@ -1801,6 +2159,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           onDayPress={handleDayPress}
           onSignOut={onSignOut}
           onAddActivity={handleAddActivity}
+          onOpenAIPlanner={handleOpenAIPlanner}
           activities={activities}
           activeTab={mobileActiveTab}
           onTabChange={handleTabChange}
@@ -1834,6 +2193,15 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
             const exceptions = await fetchExceptionsForDateRange(activityIds, weekDates[0], weekDates[6]);
             setCancelledDates(exceptions);
           }}
+        />
+        <AIPlannerModal
+          visible={showAIPlanner}
+          onClose={() => setShowAIPlanner(false)}
+          onApprove={handleApproveAISchedule}
+          recurringActivities={getRecurringActivities()}
+          weekStart={getWeekStartDate()}
+          colors={colors}
+          userId={user?.uid || ''}
         />
       </>
     );
@@ -1878,6 +2246,15 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
             setCancelledDates(exceptions);
           }}
         />
+        <AIPlannerModal
+          visible={showAIPlanner}
+          onClose={() => setShowAIPlanner(false)}
+          onApprove={handleApproveAISchedule}
+          recurringActivities={getRecurringActivities()}
+          weekStart={getWeekStartDate()}
+          colors={colors}
+          userId={user?.uid || ''}
+        />
       </>
     );
   }
@@ -1889,6 +2266,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
         currentDay={currentDay}
         onSignOut={onSignOut}
         onAddActivity={handleAddActivity}
+        onOpenAIPlanner={handleOpenAIPlanner}
         activities={activities}
         onActivityClick={handleActivityClick}
         showActivitiesPanel={showActivitiesPanel}
@@ -1926,6 +2304,15 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           setCancelledDates(exceptions);
         }}
       />
+      <AIPlannerModal
+        visible={showAIPlanner}
+        onClose={() => setShowAIPlanner(false)}
+        onApprove={handleApproveAISchedule}
+        recurringActivities={getRecurringActivities()}
+        weekStart={getWeekStartDate()}
+        colors={colors}
+        userId={user?.uid || ''}
+      />
     </>
   );
 };
@@ -1938,9 +2325,10 @@ type MobileWeekListProps = {
   onDayPress: (day: DayOfWeek) => void;
   onSignOut?: () => void;
   onAddActivity?: () => void;
+  onOpenAIPlanner?: () => void;
   activities: Activity[];
-  activeTab: 'calendar' | 'add';
-  onTabChange: (tab: 'calendar' | 'add') => void;
+  activeTab: 'calendar' | 'add' | 'ai';
+  onTabChange: (tab: 'calendar' | 'add' | 'ai') => void;
   onActivityClick?: (activity: Activity) => void;
   onImportGoogleCalendar?: () => void;
   isImporting?: boolean;
@@ -1952,12 +2340,18 @@ type MobileWeekListProps = {
   onToggleView: () => void;
 };
 
-const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, activeTab, onTabChange, activities, onActivityClick, onImportGoogleCalendar, isImporting, importError, importSuccess, weekOffset, onWeekChange, viewMode, onToggleView }: MobileWeekListProps) => {
+const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, onOpenAIPlanner, activeTab, onTabChange, activities, onActivityClick, onImportGoogleCalendar, isImporting, importError, importSuccess, weekOffset, onWeekChange, viewMode, onToggleView }: MobileWeekListProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
   
-  // Animation value for sliding (0 = calendar, 1 = add)
-  const slideAnim = useRef(new Animated.Value(0)).current;
+  // Animation value for sliding (0 = calendar, 1 = add, 2 = ai)
+  const getTabValue = (tab: 'calendar' | 'add' | 'ai') => {
+    if (tab === 'calendar') return 0;
+    if (tab === 'add') return 1;
+    return 2;
+  };
+  
+  const slideAnim = useRef(new Animated.Value(getTabValue(activeTab))).current;
   
   // Swipe threshold (25% of screen width)
   const SWIPE_THRESHOLD = screenWidth * 0.25;
@@ -1971,23 +2365,33 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, acti
     },
     onPanResponderMove: (_, gestureState) => {
       // Calculate the slide position based on gesture
-      const currentValue = activeTab === 'calendar' ? 0 : 1;
+      const currentValue = getTabValue(activeTab);
       const gestureProgress = -gestureState.dx / screenWidth;
-      const newValue = Math.max(0, Math.min(1, currentValue + gestureProgress));
+      const newValue = Math.max(0, Math.min(2, currentValue + gestureProgress));
       slideAnim.setValue(newValue);
     },
     onPanResponderRelease: (_, gestureState) => {
       // Determine if we should complete the swipe or snap back
-      if (gestureState.dx < -SWIPE_THRESHOLD && activeTab === 'calendar') {
-        // Swipe left - go to add
-        onTabChange('add');
-      } else if (gestureState.dx > SWIPE_THRESHOLD && activeTab === 'add') {
-        // Swipe right - go to calendar
-        onTabChange('calendar');
+      const currentValue = getTabValue(activeTab);
+      
+      if (gestureState.dx < -SWIPE_THRESHOLD) {
+        // Swipe left - go to next tab
+        if (activeTab === 'calendar') {
+          onTabChange('add');
+        } else if (activeTab === 'add') {
+          onTabChange('ai');
+        }
+      } else if (gestureState.dx > SWIPE_THRESHOLD) {
+        // Swipe right - go to previous tab
+        if (activeTab === 'ai') {
+          onTabChange('add');
+        } else if (activeTab === 'add') {
+          onTabChange('calendar');
+        }
       } else {
         // Snap back to current tab
         Animated.spring(slideAnim, {
-          toValue: activeTab === 'calendar' ? 0 : 1,
+          toValue: currentValue,
           useNativeDriver: true,
           tension: 100,
           friction: 10,
@@ -1999,7 +2403,7 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, acti
   // Animate when tab changes
   useEffect(() => {
     Animated.spring(slideAnim, {
-      toValue: activeTab === 'calendar' ? 0 : 1,
+      toValue: getTabValue(activeTab),
       useNativeDriver: true,
       tension: 100,
       friction: 10,
@@ -2008,13 +2412,18 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, acti
   
   // Calculate slide transforms
   const calendarTranslateX = slideAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, -screenWidth],
+    inputRange: [0, 1, 2],
+    outputRange: [0, -screenWidth, -screenWidth * 2],
   });
   
   const addTranslateX = slideAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [screenWidth, 0],
+    inputRange: [0, 1, 2],
+    outputRange: [screenWidth, 0, -screenWidth],
+  });
+  
+  const aiTranslateX = slideAnim.interpolate({
+    inputRange: [0, 1, 2],
+    outputRange: [screenWidth * 2, screenWidth, 0],
   });
 
   // Darker header color for contrast with day panels
@@ -2095,6 +2504,18 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, acti
                 color={activeTab === 'add' ? colors.primary : colors.textSecondary} 
               />
             </Pressable>
+            {onOpenAIPlanner && (
+              <Pressable
+                style={styles.navNotchButton}
+                onPress={() => onTabChange('ai')}
+              >
+                <Ionicons 
+                  name="sparkles" 
+                  size={20} 
+                  color={activeTab === 'ai' ? colors.primary : colors.textSecondary} 
+                />
+              </Pressable>
+            )}
           </View>
         </View>
       </View>
@@ -2295,6 +2716,52 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, acti
             </ScrollView>
           </View>
         </Animated.View>
+
+        {/* AI Helper View */}
+        {onOpenAIPlanner && (
+          <Animated.View 
+            style={[
+              styles.slidingView,
+              styles.slidingViewAbsolute,
+              { transform: [{ translateX: aiTranslateX }] }
+            ]}
+          >
+            <View style={[styles.addActivityView, { backgroundColor: colors.background }]}>
+              <ScrollView 
+                style={styles.activitiesListScroll}
+                contentContainerStyle={styles.activitiesListContent}
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.aiHelperContent}>
+                  <View style={[styles.aiHelperHeader, { backgroundColor: colors.card }]}>
+                    <Ionicons name="sparkles" size={32} color={colors.primary} />
+                    <Text style={[styles.aiHelperTitle, { color: colors.textPrimary }]}>
+                      AI Schedule Planner
+                    </Text>
+                    <Text style={[styles.aiHelperSubtitle, { color: colors.textSecondary }]}>
+                      Describe your schedule for this week and let AI generate it for you
+                    </Text>
+                  </View>
+                  
+                  <Pressable 
+                    style={[styles.aiHelperButtonMobileFull, { backgroundColor: colors.primary }]}
+                    onPress={onOpenAIPlanner}
+                  >
+                    <Ionicons name="sparkles" size={22} color="#ffffff" />
+                    <Text style={styles.aiHelperButtonMobileFullText}>Open AI Planner</Text>
+                  </Pressable>
+                  
+                  <View style={[styles.aiHelperInfo, { backgroundColor: colors.card }]}>
+                    <Ionicons name="information-circle" size={20} color={colors.primary} />
+                    <Text style={[styles.aiHelperInfoText, { color: colors.textSecondary }]}>
+                      The AI will respect your existing recurring activities and generate new ones based on your request.
+                    </Text>
+                  </View>
+                </View>
+              </ScrollView>
+            </View>
+          </Animated.View>
+        )}
       </View>
     </View>
   );
@@ -2786,6 +3253,7 @@ type DesktopWeekGridProps = {
   currentDay: DayOfWeek;
   onSignOut?: () => void;
   onAddActivity?: () => void;
+  onOpenAIPlanner?: () => void;
   activities: Activity[];
   onActivityClick?: (activity: Activity) => void;
   showActivitiesPanel: boolean;
@@ -2813,7 +3281,7 @@ const TIME_SLOTS = Array.from({ length: 24 }, (_, i) => {
 
 const HOUR_HEIGHT = 50; // Height of each hour slot in pixels
 
-const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onActivityClick, showActivitiesPanel, onToggleActivitiesPanel, onImportGoogleCalendar, isImporting, importError, importSuccess, weekOffset, onPrevWeek, onNextWeek, onGoToToday, viewMode, onToggleView, cancelledDates }: DesktopWeekGridProps) => {
+const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, onOpenAIPlanner, activities, onActivityClick, showActivitiesPanel, onToggleActivitiesPanel, onImportGoogleCalendar, isImporting, importError, importSuccess, weekOffset, onPrevWeek, onNextWeek, onGoToToday, viewMode, onToggleView, cancelledDates }: DesktopWeekGridProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
   const scrollRef = useWeeklyGridScrollbar();
@@ -2866,6 +3334,13 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, activities, onA
               <ImportCalendarButton
                 onPress={onImportGoogleCalendar}
                 isImporting={isImporting || false}
+                colors={colors}
+              />
+            )}
+            
+            {onOpenAIPlanner && (
+              <AIHelperButton
+                onPress={onOpenAIPlanner}
                 colors={colors}
               />
             )}
@@ -3340,6 +3815,146 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  aiHelperButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  aiHelperButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  errorMessage: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 12,
+    gap: 8,
+  },
+  errorText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  recurringActivitiesInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  previewActivities: {
+    gap: 12,
+  },
+  previewDayGroup: {
+    gap: 6,
+  },
+  previewDayHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginBottom: 4,
+  },
+  previewDayName: {
+    fontSize: 14,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  previewDayCount: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  previewActivityItem: {
+    flexDirection: 'row',
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    marginLeft: 8,
+  },
+  previewActivityColorBar: {
+    width: 4,
+  },
+  previewActivityInfo: {
+    flex: 1,
+    padding: 12,
+  },
+  previewActivityName: {
+    fontSize: 15,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  previewActivityMeta: {
+    fontSize: 12,
+  },
+  aiHelperButtonMobile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  aiHelperButtonMobileText: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  aiHelperContent: {
+    padding: 20,
+    gap: 20,
+  },
+  aiHelperHeader: {
+    alignItems: 'center',
+    padding: 24,
+    borderRadius: 16,
+    gap: 12,
+  },
+  aiHelperTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  aiHelperSubtitle: {
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  aiHelperButtonMobileFull: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 14,
+  },
+  aiHelperButtonMobileFullText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  aiHelperInfo: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    padding: 16,
+    borderRadius: 12,
+  },
+  aiHelperInfoText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+  },
   // Import Calendar Button
   importCalendarButton: {
     flexDirection: 'row',
@@ -3472,12 +4087,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'flex-end',
-    width: '65%',
+    width: '75%',
     paddingBottom: 6,
     height: 32,
     borderBottomLeftRadius: 150,
     borderBottomRightRadius: 150,
-    gap: 16,
+    gap: 12,
   },
   navNotchButton: {
     width: 32,
