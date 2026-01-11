@@ -25,7 +25,16 @@
    ```env
    EXPO_PUBLIC_SUPABASE_URL=your_supabase_url
    EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+   EXPO_PUBLIC_GEMINI_API_KEY=your_gemini_api_key
    ```
+   
+   **Getting a Gemini API Key:**
+   1. Go to [Google AI Studio](https://makersuite.google.com/app/apikey)
+   2. Sign in with your Google account
+   3. Click "Create API Key"
+   4. Copy the API key and add it to your `.env` file
+   
+   **Note:** The Gemini API key is required for the AI Schedule Planner feature. Without it, the AI planner will show an error when trying to generate schedules.
    
 
 ## Running the App
@@ -63,6 +72,23 @@ ChronoPal/
 │   ├── lib/                # External service clients (Supabase)
 │   ├── screens/            # Screen components
 │   ├── services/           # API and business logic
+│   │   ├── ai/             # AI services (Gemini integration)
+│   │   │   ├── geminiClient.ts    # Gemini API client
+│   │   │   ├── plannerService.ts   # Schedule generation logic
+│   │   │   ├── prompts.ts          # AI prompt templates
+│   │   │   └── index.ts            # Public API exports
+│   │   ├── auth/           # Authentication services
+│   │   │   ├── authService.ts     # Auth logic (email, OAuth)
+│   │   │   └── index.ts            # Public API exports
+│   │   ├── database/       # Database services (Supabase)
+│   │   │   ├── activityService.ts  # Activity CRUD operations
+│   │   │   ├── categoryService.ts  # Category management
+│   │   │   ├── exceptionService.ts # Recurrence exceptions
+│   │   │   ├── reminderService.ts   # Reminder management
+│   │   │   └── index.ts            # Public API exports
+│   │   └── integrations/   # External integrations
+│   │       ├── calendarService.ts  # Google Calendar integration
+│   │       └── index.ts            # Public API exports
 │   ├── store/              # Zustand state management
 │   ├── theme/              # Theme colors and styles
 │   ├── types/              # TypeScript type definitions

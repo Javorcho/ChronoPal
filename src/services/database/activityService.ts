@@ -132,15 +132,51 @@ export const fetchActivitiesForDateRange = async (
   }
 
   const supabase = getSupabaseClient();
-  const { data, error } = await supabase
+  
+  // Fetch all activities (including recurring ones)
+  const { data: activitiesData, error: activitiesError } = await supabase
     .from(COLLECTION)
     .select('*')
     .eq('user_id', userId)
     .or(`activity_date.gte.${startDate},activity_date.lte.${endDate},and(activity_date.is.null,is_recurring.eq.true)`)
     .order('start_time', { ascending: true });
 
-  if (error) throw error;
-  return (data ?? []).map(mapRowToActivity);
+  if (activitiesError) throw activitiesError;
+  
+  const allActivities = (activitiesData ?? []).map(mapRowToActivity);
+  
+  // Fetch exceptions for this date range
+  const activityIds = allActivities.map(a => a.id);
+  if (activityIds.length === 0) return allActivities;
+  
+  const { data: exceptionsData } = await supabase
+    .from('activity_exceptions')
+    .select('activity_id, exception_date, exception_type')
+    .in('activity_id', activityIds)
+    .eq('exception_type', 'cancelled')
+    .gte('exception_date', startDate)
+    .lte('exception_date', endDate);
+  
+  // Create a map of cancelled dates per activity
+  const cancelledDates = new Map<string, Set<string>>();
+  (exceptionsData || []).forEach((ex: any) => {
+    if (!cancelledDates.has(ex.activity_id)) {
+      cancelledDates.set(ex.activity_id, new Set());
+    }
+    cancelledDates.get(ex.activity_id)!.add(ex.exception_date);
+  });
+  
+  // Filter out activities that are cancelled for specific dates
+  return allActivities.filter(activity => {
+    // For specific date activities, check if that date is cancelled
+    if (activity.activityDate) {
+      const cancelled = cancelledDates.get(activity.id);
+      return !cancelled || !cancelled.has(activity.activityDate);
+    }
+    
+    // For recurring activities, we keep them but filter in getActivitiesForDay
+    return true;
+  });
 };
 
 export const fetchActivitiesForWeek = async (userId: string, weekOffset: number = 0): Promise<Activity[]> => {
@@ -148,12 +184,94 @@ export const fetchActivitiesForWeek = async (userId: string, weekOffset: number 
   return fetchActivitiesForDateRange(userId, weekDates[0], weekDates[6]);
 };
 
-export const getActivitiesForDay = (activities: Activity[], day: DayOfWeek, weekOffset: number = 0): Activity[] => {
+// Store exceptions in memory for quick lookup
+let exceptionsCache: Map<string, Set<string>> = new Map();
+let exceptionsCacheDate: string = '';
+
+/**
+ * Fetch and cache exceptions for a date range
+ */
+export const fetchExceptionsForDateRange = async (
+  activityIds: string[],
+  startDate: string,
+  endDate: string
+): Promise<Map<string, Set<string>>> => {
+  if (!isSupabaseConfigured || activityIds.length === 0) {
+    return new Map();
+  }
+
+  // Use cache if it's for the same date range
+  const cacheKey = `${startDate}-${endDate}`;
+  if (exceptionsCacheDate === cacheKey && exceptionsCache.size > 0) {
+    return exceptionsCache;
+  }
+
+  const supabase = getSupabaseClient();
+  const { data: exceptionsData } = await supabase
+    .from('activity_exceptions')
+    .select('activity_id, exception_date, exception_type')
+    .in('activity_id', activityIds)
+    .eq('exception_type', 'cancelled')
+    .gte('exception_date', startDate)
+    .lte('exception_date', endDate);
+
+  const cancelledDates = new Map<string, Set<string>>();
+  (exceptionsData || []).forEach((ex: any) => {
+    if (!cancelledDates.has(ex.activity_id)) {
+      cancelledDates.set(ex.activity_id, new Set());
+    }
+    cancelledDates.get(ex.activity_id)!.add(ex.exception_date);
+  });
+
+  exceptionsCache = cancelledDates;
+  exceptionsCacheDate = cacheKey;
+  return cancelledDates;
+};
+
+/**
+ * Clear exceptions cache (call when activities change)
+ */
+export const clearExceptionsCache = () => {
+  exceptionsCache = new Map();
+  exceptionsCacheDate = '';
+};
+
+export const getActivitiesForDay = (
+  activities: Activity[], 
+  day: DayOfWeek, 
+  weekOffset: number = 0,
+  cancelledDates?: Map<string, Set<string>>
+): Activity[] => {
   const targetDate = formatDateToISO(dayToDate(day, weekOffset));
+  
   return activities.filter(activity => {
-    if (activity.activityDate) return activity.activityDate === targetDate;
-    if (activity.isRecurring && activity.day === day) return true;
-    return activity.day === day && !activity.activityDate;
+    // For specific date activities
+    if (activity.activityDate) {
+      if (activity.activityDate !== targetDate) return false;
+      // Check if cancelled
+      if (cancelledDates) {
+        const cancelled = cancelledDates.get(activity.id);
+        if (cancelled && cancelled.has(activity.activityDate)) return false;
+      }
+      return true;
+    }
+    
+    // For recurring activities on this day
+    if (activity.isRecurring && activity.day === day) {
+      // Check if this specific date is cancelled
+      if (cancelledDates) {
+        const cancelled = cancelledDates.get(activity.id);
+        if (cancelled && cancelled.has(targetDate)) return false;
+      }
+      return true;
+    }
+    
+    // Legacy: non-recurring activities on this day
+    if (activity.day === day && !activity.activityDate) {
+      return true;
+    }
+    
+    return false;
   });
 };
 

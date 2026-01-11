@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
-import { getSessionWithToken } from '@/services/authService';
-import { fetchAllCalendarEvents, fetchCalendars } from '@/services/calendarService';
+import { getSessionWithToken } from '@/services/auth/authService';
+import { fetchAllCalendarEvents, fetchCalendars } from '@/services/integrations/calendarService';
 import { Calendar, CalendarEvent, CalendarProvider } from '@/types/calendar';
 
 type CalendarState = {

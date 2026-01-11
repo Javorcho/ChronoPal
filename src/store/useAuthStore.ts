@@ -9,7 +9,7 @@ import {
   signOutUser,
   signUpWithEmail,
   subscribeToAuthChanges,
-} from '@/services/authService';
+} from '@/services/auth/authService';
 
 type AuthState = {
   user?: AuthUser;
