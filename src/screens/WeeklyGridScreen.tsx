@@ -17,7 +17,7 @@ import {
 
 import { useTheme } from '@/store/useThemeStore';
 import { useAuthStore } from '@/store/useAuthStore';
-import { Activity, dayNames, DayOfWeek, dayOrder, formatDateToISO, dayToDate, dateToDayOfWeek, ActivitySource } from '@/types/schedule';
+import { Activity, dayNames, DayOfWeek, dayOrder, formatDateToISO, dayToDate, dateToDayOfWeek } from '@/types/schedule';
 import { subscribeToActivities, createActivity, updateActivity, removeActivity, getActivitiesForDay, fetchExceptionsForDateRange, clearExceptionsCache } from '@/services/database/activityService';
 import { fetchGoogleCalendarEvents } from '@/services/integrations/calendarService';
 import { getSessionWithToken } from '@/services/auth/authService';
@@ -2036,10 +2036,9 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
         const startTime = `${startDate.getHours().toString().padStart(2, '0')}:${startDate.getMinutes().toString().padStart(2, '0')}`;
         const endTime = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
         
-        // Check if this event already exists (by external ID or name/time)
+        // Check if this event already exists (by name/time)
         const exists = activities.some(
-          (a) => a.externalId === event.id || 
-            (a.name === event.title && a.day === day && a.startTime === startTime && a.endTime === endTime)
+          (a) => a.name === event.title && a.day === day && a.startTime === startTime && a.endTime === endTime
         );
         
         if (exists) continue;
@@ -2047,7 +2046,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
         // Get the activity date for this event
         const activityDate = formatDateToISO(startDate);
 
-        // Create the activity with external tracking
+        // Create the activity
         try {
           await createActivity({
             userId: user.uid,
@@ -2058,10 +2057,6 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
             isRecurring: false,
             startTime,
             endTime,
-            description: event.description,
-            location: event.location,
-            externalId: event.id,
-            source: ActivitySource.Google,
           });
           importedCount++;
         } catch (err) {

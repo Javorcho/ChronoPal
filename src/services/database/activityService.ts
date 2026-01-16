@@ -3,8 +3,6 @@ import {
   ActivityId,
   ActivityInput,
   ActivityUpdate,
-  ActivitySource,
-  ActivityStatus,
   DayOfWeek,
   dayOrder,
   formatDateToISO,
@@ -27,20 +25,6 @@ const mapRowToActivity = (row: any): Activity => ({
   startTime: row.start_time,
   endTime: row.end_time,
   isRecurring: row.is_recurring,
-  recurrence: row.recurrence,
-  recurrenceRule: row.recurrence_rule,
-  recurrenceEndDate: row.recurrence_end_date,
-  parentActivityId: row.parent_activity_id,
-  categoryId: row.category_id,
-  status: row.status || ActivityStatus.Scheduled,
-  priority: row.priority,
-  description: row.description,
-  location: row.location,
-  notes: row.notes,
-  externalId: row.external_id,
-  source: row.source || ActivitySource.Manual,
-  lastSyncedAt: row.last_synced_at ? new Date(row.last_synced_at).getTime() : undefined,
-  timezone: row.timezone,
   createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
   updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : Date.now(),
 });
@@ -54,20 +38,6 @@ const mapInputToPayload = (input: ActivityInput): Record<string, any> => ({
   start_time: input.startTime,
   end_time: input.endTime,
   is_recurring: input.isRecurring,
-  recurrence: input.recurrence,
-  recurrence_rule: input.recurrenceRule,
-  recurrence_end_date: input.recurrenceEndDate,
-  parent_activity_id: input.parentActivityId,
-  category_id: input.categoryId,
-  status: input.status || ActivityStatus.Scheduled,
-  priority: input.priority,
-  description: input.description,
-  location: input.location,
-  notes: input.notes,
-  external_id: input.externalId,
-  source: input.source || ActivitySource.Manual,
-  last_synced_at: input.lastSyncedAt ? new Date(input.lastSyncedAt).toISOString() : null,
-  timezone: input.timezone,
 });
 
 export const subscribeToActivities = (
@@ -282,8 +252,6 @@ export const createActivity = async (input: ActivityInput): Promise<Activity> =>
       createdAt: Date.now(),
       updatedAt: Date.now(),
       ...input,
-      status: input.status || ActivityStatus.Scheduled,
-      source: input.source || ActivitySource.Manual,
     };
   }
 
@@ -310,15 +278,6 @@ export const updateActivity = async (id: ActivityId, updates: ActivityUpdate) =>
   if (updates.startTime !== undefined) payload.start_time = updates.startTime;
   if (updates.endTime !== undefined) payload.end_time = updates.endTime;
   if (updates.isRecurring !== undefined) payload.is_recurring = updates.isRecurring;
-  if (updates.recurrence !== undefined) payload.recurrence = updates.recurrence;
-  if (updates.categoryId !== undefined) payload.category_id = updates.categoryId;
-  if (updates.status !== undefined) payload.status = updates.status;
-  if (updates.priority !== undefined) payload.priority = updates.priority;
-  if (updates.description !== undefined) payload.description = updates.description;
-  if (updates.location !== undefined) payload.location = updates.location;
-  if (updates.notes !== undefined) payload.notes = updates.notes;
-  if (updates.externalId !== undefined) payload.external_id = updates.externalId;
-  if (updates.source !== undefined) payload.source = updates.source;
 
   const { error } = await supabase.from(COLLECTION).update(payload).eq('id', id);
   if (error) throw error;
@@ -331,32 +290,8 @@ export const removeActivity = async (id: ActivityId) => {
   if (error) throw error;
 };
 
-export const findByExternalId = async (userId: string, externalId: string, source: ActivitySource): Promise<Activity | null> => {
-  if (!isSupabaseConfigured) return null;
-  const supabase = getSupabaseClient();
-  const { data, error } = await supabase
-    .from(COLLECTION)
-    .select('*')
-    .eq('user_id', userId)
-    .eq('external_id', externalId)
-    .eq('source', source)
-    .single();
-  if (error || !data) return null;
-  return mapRowToActivity(data);
-};
-
-export const importExternalActivity = async (input: ActivityInput): Promise<Activity> => {
-  if (!input.externalId || !input.source) throw new Error('External ID and source required');
-  const existing = await findByExternalId(input.userId, input.externalId, input.source);
-  if (existing) {
-    await updateActivity(existing.id, { ...input, lastSyncedAt: Date.now() });
-    return { ...existing, ...input, lastSyncedAt: Date.now() };
-  }
-  return createActivity({ ...input, lastSyncedAt: Date.now() });
-};
-
-export const completeActivity = async (id: ActivityId) => updateActivity(id, { status: ActivityStatus.Completed });
-export const cancelActivity = async (id: ActivityId) => updateActivity(id, { status: ActivityStatus.Cancelled });
+// Removed: findByExternalId, importExternalActivity, completeActivity, cancelActivity
+// These functions relied on deleted columns (external_id, source, status)
 
 export const getActivityStats = async (userId: string) => {
   const activities = await fetchActivities(userId);
@@ -364,8 +299,6 @@ export const getActivityStats = async (userId: string) => {
   const todayDayOfWeek = dateToDayOfWeek(new Date());
   return {
     total: activities.length,
-    scheduled: activities.filter(a => a.status === ActivityStatus.Scheduled || !a.status).length,
-    completed: activities.filter(a => a.status === ActivityStatus.Completed).length,
     recurring: activities.filter(a => a.isRecurring).length,
     todayCount: activities.filter(a => {
       if (a.activityDate) return a.activityDate === today;
