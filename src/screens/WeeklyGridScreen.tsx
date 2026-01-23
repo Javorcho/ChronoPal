@@ -2111,11 +2111,16 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
 
   // Mobile expanded single day view
   if (isMobile && selectedDay) {
+    // Check if the selected day is actually today (considering week offset)
+    const selectedDate = dayToDate(selectedDay, weekOffset);
+    const today = new Date();
+    const isSelectedDayToday = formatDateToISO(selectedDate) === formatDateToISO(today);
+    
     return (
       <>
         <MobileDayExpanded
           day={selectedDay}
-          isToday={selectedDay === currentDay}
+          isToday={isSelectedDayToday}
           onBack={handleBack}
           onSignOut={onSignOut}
           activities={getActivitiesForDay(activities, selectedDay, weekOffset, cancelledDates)}
@@ -2219,6 +2224,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           onAddActivity={handleAddActivity}
           onOpenAIPlanner={handleOpenAIPlanner}
           activities={activities}
+          cancelledDates={cancelledDates}
           activeTab={mobileActiveTab}
           onTabChange={handleTabChange}
           onActivityClick={handleActivityClick}
@@ -2386,6 +2392,7 @@ type MobileWeekListProps = {
   onAddActivity?: () => void;
   onOpenAIPlanner?: () => void;
   activities: Activity[];
+  cancelledDates?: Map<string, Set<string>>;
   activeTab: 'calendar' | 'add' | 'ai';
   onTabChange: (tab: 'calendar' | 'add' | 'ai') => void;
   onActivityClick?: (activity: Activity) => void;
@@ -2399,7 +2406,7 @@ type MobileWeekListProps = {
   onToggleView: () => void;
 };
 
-const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, onOpenAIPlanner, activeTab, onTabChange, activities, onActivityClick, onImportGoogleCalendar, isImporting, importError, importSuccess, weekOffset, onWeekChange, viewMode, onToggleView }: MobileWeekListProps) => {
+const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, onOpenAIPlanner, activeTab, onTabChange, activities, cancelledDates, onActivityClick, onImportGoogleCalendar, isImporting, importError, importSuccess, weekOffset, onWeekChange, viewMode, onToggleView }: MobileWeekListProps) => {
   const { colors } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
   
@@ -2623,8 +2630,7 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, onOp
 
                   {/* Timeline Bar - 24h day representation */}
                   <View style={[styles.timelineBar, { backgroundColor: colors.inputBackground }]}>
-                    {activities
-                      .filter((a) => a.day === day)
+                    {getActivitiesForDay(activities, day, weekOffset, cancelledDates)
                       .map((a) => {
                         const startMinutes = parseTime(a.startTime);
                         const endMinutes = parseTime(a.endTime);
@@ -3301,6 +3307,19 @@ const MonthlyCalendarView = ({
           ))}
         </View>
       </ScrollView>
+      
+      {/* Back to Weekly View Button (Mobile Only) */}
+      {Platform.OS !== 'web' && (
+        <View style={[styles.monthlyBackButtonContainer, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
+          <Pressable
+            style={[styles.monthlyBackButton, { backgroundColor: colors.primary }]}
+            onPress={onToggleView}
+          >
+            <Ionicons name="grid-outline" size={20} color="#ffffff" />
+            <Text style={styles.monthlyBackButtonText}>Back to Weekly View</Text>
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 };
@@ -3821,6 +3840,25 @@ const styles = StyleSheet.create({
   monthlyMoreText: {
     fontSize: 10,
     marginTop: 2,
+  },
+  monthlyBackButtonContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+  },
+  monthlyBackButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    gap: 8,
+  },
+  monthlyBackButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
   },
   mobileViewToggle: {
     width: 32,

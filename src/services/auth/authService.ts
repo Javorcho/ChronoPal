@@ -162,11 +162,14 @@ const getRedirectUri = () => {
   // On native (Expo Go or standalone), use the appropriate redirect URI
   // For Expo Go: exp://192.168.x.x:8081/--/auth/callback
   // For standalone: chronopal://auth/callback
+  // useProxy: true allows Expo Go to use the proxy redirect URI
   const redirectUri = makeRedirectUri({
     scheme: 'chronopal',
     path: 'auth/callback',
+    useProxy: true, // Use Expo proxy for Expo Go (falls back to custom scheme for standalone)
   });
   console.log('OAuth Redirect URI:', redirectUri);
+  console.log('Platform:', Platform.OS);
   return redirectUri;
 };
 
@@ -340,6 +343,7 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
 
     console.log('Opening OAuth URL:', data.url);
     console.log('Expected redirect to:', redirectUri);
+    console.log('⚠️ IMPORTANT: Make sure this redirect URI is added to Supabase Dashboard → Authentication → URL Configuration');
 
     // Open the browser and wait for redirect
     const result = await WebBrowser.openAuthSessionAsync(
