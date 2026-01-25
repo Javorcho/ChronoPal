@@ -195,9 +195,6 @@ export type ActivityException = {
   activityId: ActivityId;
   exceptionDate: string; // YYYY-MM-DD
   exceptionType: ExceptionType;
-  modifiedStartTime?: string;
-  modifiedEndTime?: string;
-  modifiedName?: string;
   createdAt: number;
 };
 

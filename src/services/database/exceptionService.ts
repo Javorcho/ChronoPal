@@ -17,9 +17,6 @@ const mapRowToException = (row: any): ActivityException => ({
   activityId: row.activity_id,
   exceptionDate: row.exception_date,
   exceptionType: row.exception_type as ExceptionType,
-  modifiedStartTime: row.modified_start_time,
-  modifiedEndTime: row.modified_end_time,
-  modifiedName: row.modified_name,
   createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
 });
 
@@ -27,9 +24,6 @@ const mapInputToPayload = (input: ActivityExceptionInput): Record<string, any> =
   activity_id: input.activityId,
   exception_date: input.exceptionDate,
   exception_type: input.exceptionType,
-  modified_start_time: input.modifiedStartTime || null,
-  modified_end_time: input.modifiedEndTime || null,
-  modified_name: input.modifiedName || null,
 });
 
 /**
@@ -92,14 +86,20 @@ export const createExceptionsForWeeks = async (
   const supabase = getSupabaseClient();
 
   for (const exceptionDate of exceptionDates) {
-    // Check if exception already exists
-    const { data: existing } = await supabase
+    // Check if exception already exists (use maybeSingle to avoid 406 error when no result)
+    const { data: existing, error: checkError } = await supabase
       .from(COLLECTION)
       .select('id')
       .eq('activity_id', activityId)
       .eq('exception_date', exceptionDate)
-      .single();
+      .maybeSingle();
 
+    // If there's an error (other than "not found"), log it but continue
+    if (checkError && checkError.code !== 'PGRST116') {
+      console.error(`Error checking exception for ${exceptionDate}:`, checkError);
+    }
+
+    // Only create if it doesn't exist
     if (!existing) {
       const input: ActivityExceptionInput = {
         activityId,

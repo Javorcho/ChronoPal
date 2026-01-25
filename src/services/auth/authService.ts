@@ -352,6 +352,11 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
     );
 
     console.log('OAuth result type:', result.type);
+    console.log('OAuth result:', JSON.stringify(result, null, 2));
+    
+    if (result.type === 'locked') {
+      throw new Error('OAuth session is locked. Please close other authentication windows and try again.');
+    }
 
     if (result.type === 'success' && result.url) {
       console.log('OAuth success URL:', result.url);
