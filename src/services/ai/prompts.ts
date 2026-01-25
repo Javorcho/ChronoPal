@@ -5,7 +5,8 @@ import { Activity, DayOfWeek, dayNames } from '@/types/schedule';
  */
 export const buildSchedulePrompt = (
   weekStart: Date,
-  recurringActivities: Activity[]
+  recurringActivities: Activity[],
+  allActivities: Activity[] = []
 ): string => {
   // Build context about existing recurring activities
   const recurringContext = recurringActivities.length > 0
@@ -13,6 +14,13 @@ export const buildSchedulePrompt = (
         `- ${a.name}: ${dayNames[a.day]} from ${a.startTime} to ${a.endTime}`
       ).join('\n')}`
     : '\n\nNo existing recurring activities.';
+
+  // Build context about all existing activities (for rearrangement)
+  const allActivitiesContext = allActivities.length > 0
+    ? `\n\nAll existing activities in the schedule:\n${allActivities.map(a => 
+        `- ID: ${a.id}, ${a.name}: ${dayNames[a.day]} from ${a.startTime} to ${a.endTime}${a.isRecurring ? ' (recurring)' : ''}`
+      ).join('\n')}`
+    : '\n\nNo existing activities.';
 
   // Format week start date
   const weekStartStr = weekStart.toLocaleDateString('en-US', { 
@@ -27,7 +35,7 @@ export const buildSchedulePrompt = (
 
 Context:
 - Week starts on: ${weekStartStr}
-- Current day names: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday${recurringContext}
+- Current day names: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday${recurringContext}${allActivitiesContext}
 
 Instructions:
 1. Parse the user's request and extract all activities they want to schedule
@@ -48,7 +56,11 @@ Instructions:
 9. DO NOT create activities that conflict with existing recurring activities
 10. If the user requests multiple different activities, create separate entries for each
 11. If the user requests activities for a specific day, create activities for that day only
-12. Only delete activities that are explicitly requested to be deleted
+12. If the user wants to rearrange, move, or reschedule existing activities, include an "id" field with the activity ID and an "action" field set to "update"
+13. If the user wants to delete activities, include an "id" field with the activity ID and an "action" field set to "delete"
+14. For new activities, do NOT include "id" or "action" fields (they will be created)
+15. When rearranging, you can change the day, startTime, or endTime of existing activities
+16. Only rearrange activities that are explicitly requested to be rearranged
 Return ONLY a valid JSON array, no markdown, no code blocks, no explanation. Example format:
 [
   {
@@ -66,6 +78,28 @@ Return ONLY a valid JSON array, no markdown, no code blocks, no explanation. Exa
     "endTime": "07:00",
     "color": "#EF4444",
     "isRecurring": true
+  }
+]
+
+For rearranging existing activities, include the id and action:
+[
+  {
+    "id": "activity-id-here",
+    "action": "update",
+    "name": "Gym",
+    "day": "wednesday",
+    "startTime": "07:00",
+    "endTime": "08:00",
+    "color": "#EF4444",
+    "isRecurring": true
+  }
+]
+
+For deleting activities:
+[
+  {
+    "id": "activity-id-here",
+    "action": "delete"
   }
 ]`;
 };

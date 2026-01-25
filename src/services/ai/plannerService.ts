@@ -13,19 +13,32 @@ import { callGeminiAPI, isGeminiAPIConfigured } from './geminiClient';
 /**
  * Generate a schedule from natural language prompt using Gemini API
  */
+export type ActivityAction = {
+  id?: string;
+  action?: 'create' | 'update' | 'delete';
+  name?: string;
+  day?: DayOfWeek;
+  startTime?: string;
+  endTime?: string;
+  color?: string;
+  isRecurring?: boolean;
+  userId?: string;
+};
+
 export const generateSchedule = async (
   prompt: string,
   recurringActivities: Activity[],
   weekStart: Date,
-  userId: string
-): Promise<ActivityInput[]> => {
+  userId: string,
+  allActivities: Activity[] = []
+): Promise<ActivityAction[]> => {
   if (!isGeminiAPIConfigured()) {
     throw new Error('Gemini API key is not configured. Please set EXPO_PUBLIC_GEMINI_API_KEY environment variable.');
   }
 
   try {
     // Build the system prompt
-    const systemPrompt = buildSchedulePrompt(weekStart, recurringActivities);
+    const systemPrompt = buildSchedulePrompt(weekStart, recurringActivities, allActivities);
     
     // Build the full prompt with user request
     const fullPrompt = buildFullPrompt(systemPrompt, prompt);
@@ -51,10 +64,70 @@ export const generateSchedule = async (
       throw new Error('Failed to parse AI response. Please try rephrasing your request.');
     }
 
-    // Validate and transform to ActivityInput format
-    const activities: ActivityInput[] = [];
+    // Validate and transform to ActivityAction format
+    const activities: ActivityAction[] = [];
 
     for (const activity of parsedActivities) {
+      // Handle delete actions
+      if (activity.action === 'delete') {
+        if (!activity.id) {
+          console.warn('Delete action missing id, skipping:', activity);
+          continue;
+        }
+        activities.push({
+          id: activity.id,
+          action: 'delete',
+        });
+        continue;
+      }
+
+      // Handle update actions
+      if (activity.action === 'update') {
+        if (!activity.id) {
+          console.warn('Update action missing id, skipping:', activity);
+          continue;
+        }
+        
+        // Validate required fields for update
+        if (!activity.name || !activity.day || !activity.startTime || !activity.endTime) {
+          console.warn('Update action missing required fields, skipping:', activity);
+          continue;
+        }
+
+        // Validate day
+        const day = activity.day.toLowerCase();
+        if (!dayOrder.includes(day as DayOfWeek)) {
+          console.warn(`Invalid day: ${day}, skipping activity:`, activity);
+          continue;
+        }
+
+        // Validate time format (HH:mm)
+        const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+        if (!timeRegex.test(activity.startTime) || !timeRegex.test(activity.endTime)) {
+          console.warn('Invalid time format, skipping activity:', activity);
+          continue;
+        }
+
+        // Validate color (use provided or default)
+        const color = activity.color && /^#[0-9A-Fa-f]{6}$/.test(activity.color)
+          ? activity.color
+          : '#3B82F6'; // Default blue
+
+        activities.push({
+          id: activity.id,
+          action: 'update',
+          name: activity.name.trim(),
+          day: day as DayOfWeek,
+          startTime: activity.startTime,
+          endTime: activity.endTime,
+          color,
+          isRecurring: Boolean(activity.isRecurring),
+          userId,
+        });
+        continue;
+      }
+
+      // Handle create actions (default, no action field)
       // Validate required fields
       if (!activity.name || !activity.day || !activity.startTime || !activity.endTime) {
         console.warn('Skipping invalid activity:', activity);
@@ -81,6 +154,7 @@ export const generateSchedule = async (
         : '#3B82F6'; // Default blue
 
       activities.push({
+        action: 'create',
         name: activity.name.trim(),
         day: day as DayOfWeek,
         startTime: activity.startTime,

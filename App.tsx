@@ -1,11 +1,12 @@
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View, Linking, Platform } from 'react-native';
 
 import { AuthScreen } from '@/screens/AuthScreen';
 import { WeeklyGridScreen } from '@/screens/WeeklyGridScreen';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useTheme } from '@/store/useThemeStore';
+import { handleOAuthCallbackFromUrl } from '@/services/auth/authService';
 
 export default function App() {
   const user = useAuthStore((state) => state.user);
@@ -17,6 +18,33 @@ export default function App() {
 
   useEffect(() => {
     initAuth();
+    
+    // Handle initial URL (when app is opened via deep link)
+    if (Platform.OS !== 'web') {
+      Linking.getInitialURL().then((url) => {
+        if (url && url.includes('auth/callback')) {
+          console.log('App opened with OAuth callback URL:', url);
+          handleOAuthCallbackFromUrl(url).catch((error) => {
+            console.error('Failed to handle initial OAuth callback:', error);
+          });
+        }
+      });
+      
+      // Set up persistent listener for deep links (when app is already running)
+      const subscription = Linking.addEventListener('url', (event) => {
+        const { url } = event;
+        console.log('Deep link received in App:', url);
+        if (url && url.includes('auth/callback')) {
+          handleOAuthCallbackFromUrl(url).catch((error) => {
+            console.error('Failed to handle deep link OAuth callback:', error);
+          });
+        }
+      });
+      
+      return () => {
+        subscription.remove();
+      };
+    }
   }, [initAuth]);
 
   if (authLoading) {

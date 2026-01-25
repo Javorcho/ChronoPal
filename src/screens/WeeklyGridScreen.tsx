@@ -17,12 +17,12 @@ import {
 
 import { useTheme } from '@/store/useThemeStore';
 import { useAuthStore } from '@/store/useAuthStore';
-import { Activity, dayNames, DayOfWeek, dayOrder, formatDateToISO, dayToDate, dateToDayOfWeek } from '@/types/schedule';
+import { Activity, ActivityUpdate, dayNames, DayOfWeek, dayOrder, formatDateToISO, dayToDate, dateToDayOfWeek } from '@/types/schedule';
 import { subscribeToActivities, createActivity, updateActivity, removeActivity, getActivitiesForDay, fetchExceptionsForDateRange, clearExceptionsCache } from '@/services/database/activityService';
 import { fetchGoogleCalendarEvents } from '@/services/integrations/calendarService';
 import { getSessionWithToken } from '@/services/auth/authService';
 import { createExceptionsForWeeks } from '@/services/database/exceptionService';
-import { generateSchedule, validateSchedule } from '@/services/ai/plannerService';
+import { generateSchedule, validateSchedule, ActivityAction } from '@/services/ai/plannerService';
 import { ActivityInput } from '@/types/schedule';
 
 // Activity colors palette
@@ -559,6 +559,9 @@ type AddActivityModalProps = {
     endTime: string;
     activityDate?: string; // YYYY-MM-DD for specific date
     weekOffset?: number; // Week offset for non-recurring activities
+    recurrenceEndDate?: string; // YYYY-MM-DD for when recurring activity should end
+    location?: string;
+    description?: string;
   }) => Promise<string | null>; // Returns error message or null on success
   colors: any;
   mode?: 'weekly' | 'monthly'; // Selection mode
@@ -599,15 +602,23 @@ const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', m
   const [isRecurring, setIsRecurring] = useState(false);
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
+  const [location, setLocation] = useState('');
+  const [description, setDescription] = useState('');
   const [timeError, setTimeError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [datePickerMonth, setDatePickerMonth] = useState(monthOffset);
   const [weekOffset, setWeekOffset] = useState(initialWeekOffset);
+  const [recurrenceDuration, setRecurrenceDuration] = useState<'forever' | 'weeks' | 'until'>('forever');
+  const [recurrenceWeeks, setRecurrenceWeeks] = useState(4);
+  const [recurrenceEndDate, setRecurrenceEndDate] = useState<Date | null>(null);
 
-  // Reset weekOffset when modal opens
+  // Reset form when modal opens/closes
   useEffect(() => {
     if (visible) {
       setWeekOffset(initialWeekOffset);
+    } else {
+      // Reset all fields when modal closes
+      reset();
     }
   }, [visible, initialWeekOffset]);
 
@@ -621,8 +632,13 @@ const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', m
     setIsRecurring(false);
     setStartTime('');
     setEndTime('');
+    setLocation('');
+    setDescription('');
     setTimeError('');
     setIsSaving(false);
+    setRecurrenceDuration('forever');
+    setRecurrenceWeeks(4);
+    setRecurrenceEndDate(null);
   };
 
   const toggleDay = (day: DayOfWeek) => {
@@ -640,7 +656,7 @@ const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', m
     });
   };
 
-  // Validate times
+  // Validate times (allow overnight activities where end < start)
   const validateTimes = (): boolean => {
     if (!startTime && !endTime) {
       setTimeError('Please enter start and end times');
@@ -654,12 +670,8 @@ const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', m
       setTimeError('Invalid end time (use HH:MM format)');
       return false;
     }
-    const startMinutes = parseTime(startTime)!;
-    const endMinutes = parseTime(endTime)!;
-    if (endMinutes <= startMinutes) {
-      setTimeError('End time must be after start time');
-      return false;
-    }
+    // Allow overnight activities (end < start means it spans to next day)
+    // No error needed - this is a valid overnight activity
     setTimeError('');
     return true;
   };
@@ -689,6 +701,8 @@ const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', m
         startTime,
         endTime,
         activityDate,
+        location: location.trim() || undefined,
+        description: description.trim() || undefined,
       });
       if (error) {
         setTimeError(error);
@@ -698,6 +712,21 @@ const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', m
       reset();
       onClose();
       return;
+    }
+    
+    // Calculate recurrenceEndDate based on duration selection
+    let calculatedRecurrenceEndDate: string | undefined = undefined;
+    if (isRecurring && recurrenceDuration !== 'forever') {
+      if (recurrenceDuration === 'weeks') {
+        // Calculate end date based on number of weeks from today
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const endDate = new Date(today);
+        endDate.setDate(today.getDate() + (recurrenceWeeks * 7));
+        calculatedRecurrenceEndDate = formatDateToISO(endDate);
+      } else if (recurrenceDuration === 'until' && recurrenceEndDate) {
+        calculatedRecurrenceEndDate = formatDateToISO(recurrenceEndDate);
+      }
     }
     
     // For weekly mode, save for all selected days
@@ -710,6 +739,9 @@ const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', m
       startTime,
       endTime,
       weekOffset: isRecurring ? undefined : weekOffset, // Only pass weekOffset for non-recurring activities
+      recurrenceEndDate: calculatedRecurrenceEndDate,
+      location: location.trim() || undefined,
+      description: description.trim() || undefined,
     });
     
     if (error) {
@@ -856,22 +888,170 @@ const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', m
             </View>
 
             {mode === 'weekly' && (
-              <View style={styles.formGroup}>
-                <View style={styles.toggleRow}>
-                  <View>
-                    <Text style={[styles.formLabel, { color: colors.textSecondary, marginBottom: 0 }]}>
-                      Recurring
-                    </Text>
-                    <Text style={[styles.toggleHint, { color: colors.placeholder }]}>Repeat every week</Text>
+              <>
+                <View style={styles.formGroup}>
+                  <View style={styles.toggleRow}>
+                    <View>
+                      <Text style={[styles.formLabel, { color: colors.textSecondary, marginBottom: 0 }]}>
+                        Recurring
+                      </Text>
+                      <Text style={[styles.toggleHint, { color: colors.placeholder }]}>Repeat every week</Text>
+                    </View>
+                    <Switch
+                      value={isRecurring}
+                      onValueChange={setIsRecurring}
+                      trackColor={{ false: colors.inputBackground, true: colors.primary + '60' }}
+                      thumbColor={isRecurring ? colors.primary : colors.textSecondary}
+                    />
                   </View>
-                  <Switch
-                    value={isRecurring}
-                    onValueChange={setIsRecurring}
-                    trackColor={{ false: colors.inputBackground, true: colors.primary + '60' }}
-                    thumbColor={isRecurring ? colors.primary : colors.textSecondary}
-                  />
                 </View>
-              </View>
+
+                {isRecurring && (
+                  <View style={styles.formGroup}>
+                    <Text style={[styles.formLabel, { color: colors.textSecondary, marginBottom: 8 }]}>
+                      Repeat Duration
+                    </Text>
+                    
+                    {/* Duration Type Selector */}
+                    <View style={styles.recurrenceDurationRow}>
+                      <Pressable
+                        style={[
+                          styles.recurrenceDurationOption,
+                          {
+                            backgroundColor: recurrenceDuration === 'forever' ? colors.primary + '20' : colors.inputBackground,
+                            borderColor: recurrenceDuration === 'forever' ? colors.primary : colors.inputBorder,
+                          },
+                        ]}
+                        onPress={() => setRecurrenceDuration('forever')}
+                      >
+                        <Text style={[styles.recurrenceDurationText, { color: colors.textPrimary }]}>
+                          Forever
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={[
+                          styles.recurrenceDurationOption,
+                          {
+                            backgroundColor: recurrenceDuration === 'weeks' ? colors.primary + '20' : colors.inputBackground,
+                            borderColor: recurrenceDuration === 'weeks' ? colors.primary : colors.inputBorder,
+                          },
+                        ]}
+                        onPress={() => setRecurrenceDuration('weeks')}
+                      >
+                        <Text style={[styles.recurrenceDurationText, { color: colors.textPrimary }]}>
+                          For weeks
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={[
+                          styles.recurrenceDurationOption,
+                          {
+                            backgroundColor: recurrenceDuration === 'until' ? colors.primary + '20' : colors.inputBackground,
+                            borderColor: recurrenceDuration === 'until' ? colors.primary : colors.inputBorder,
+                          },
+                        ]}
+                        onPress={() => setRecurrenceDuration('until')}
+                      >
+                        <Text style={[styles.recurrenceDurationText, { color: colors.textPrimary }]}>
+                          Until date
+                        </Text>
+                      </Pressable>
+                    </View>
+
+                    {/* Weeks Input */}
+                    {recurrenceDuration === 'weeks' && (
+                      <View style={[styles.formGroup, { marginTop: 12 }]}>
+                        <Text style={[styles.formLabel, { color: colors.textSecondary, marginBottom: 8 }]}>
+                          Number of weeks
+                        </Text>
+                        <View style={styles.weeksInputRow}>
+                          <Pressable
+                            style={[styles.weeksButton, { backgroundColor: colors.inputBackground }]}
+                            onPress={() => setRecurrenceWeeks(Math.max(1, recurrenceWeeks - 1))}
+                          >
+                            <Ionicons name="remove" size={20} color={colors.textPrimary} />
+                          </Pressable>
+                          <TextInput
+                            style={[
+                              styles.weeksInput,
+                              {
+                                backgroundColor: colors.inputBackground,
+                                borderColor: colors.inputBorder,
+                                color: colors.textPrimary,
+                              },
+                            ]}
+                            value={recurrenceWeeks.toString()}
+                            onChangeText={(text) => {
+                              const num = parseInt(text, 10);
+                              if (!isNaN(num) && num > 0) {
+                                setRecurrenceWeeks(num);
+                              } else if (text === '') {
+                                setRecurrenceWeeks(1);
+                              }
+                            }}
+                            keyboardType="numeric"
+                            textAlign="center"
+                          />
+                          <Pressable
+                            style={[styles.weeksButton, { backgroundColor: colors.inputBackground }]}
+                            onPress={() => setRecurrenceWeeks(recurrenceWeeks + 1)}
+                          >
+                            <Ionicons name="add" size={20} color={colors.textPrimary} />
+                          </Pressable>
+                        </View>
+                      </View>
+                    )}
+
+                    {/* Date Picker for Until */}
+                    {recurrenceDuration === 'until' && (
+                      <View style={[styles.formGroup, { marginTop: 12 }]}>
+                        <Text style={[styles.formLabel, { color: colors.textSecondary, marginBottom: 8 }]}>
+                          End date
+                        </Text>
+                        <Pressable
+                          style={[
+                            styles.formInput,
+                            {
+                              backgroundColor: colors.inputBackground,
+                              borderColor: colors.inputBorder,
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                            },
+                          ]}
+                          onPress={() => {
+                            // Simple date picker - you can enhance this with a proper date picker library
+                            const today = new Date();
+                            const minDate = new Date(today);
+                            minDate.setDate(today.getDate() + 1); // At least tomorrow
+                            
+                            // For now, we'll use a simple approach - user can manually enter
+                            // In a real app, you'd use a date picker component
+                            const defaultDate = new Date(today);
+                            defaultDate.setDate(today.getDate() + 30); // Default to 30 days from now
+                            setRecurrenceEndDate(defaultDate);
+                          }}
+                        >
+                          <Text style={[styles.formInputText, { color: recurrenceEndDate ? colors.textPrimary : colors.placeholder }]}>
+                            {recurrenceEndDate ? formatDateToISO(recurrenceEndDate) : 'Select end date'}
+                          </Text>
+                          <Ionicons name="calendar-outline" size={20} color={colors.textSecondary} />
+                        </Pressable>
+                        {recurrenceEndDate && (
+                          <Pressable
+                            style={styles.clearDateButton}
+                            onPress={() => setRecurrenceEndDate(null)}
+                          >
+                            <Text style={[styles.clearDateText, { color: colors.error || '#EF4444' }]}>
+                              Clear date
+                            </Text>
+                          </Pressable>
+                        )}
+                      </View>
+                    )}
+                  </View>
+                )}
+              </>
             )}
 
             <View style={styles.formGroup}>
@@ -920,6 +1100,47 @@ const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', m
               {timeError ? (
                 <Text style={[styles.timeError, { color: colors.error || '#EF4444' }]}>{timeError}</Text>
               ) : null}
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Location (Optional)</Text>
+              <TextInput
+                style={[
+                  styles.formInput,
+                  {
+                    backgroundColor: colors.inputBackground,
+                    borderColor: colors.inputBorder,
+                    color: colors.textPrimary,
+                  },
+                ]}
+                placeholder="e.g., Gym, Office, Home"
+                placeholderTextColor={colors.placeholder}
+                value={location}
+                onChangeText={setLocation}
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Description (Optional)</Text>
+              <TextInput
+                style={[
+                  styles.formInput,
+                  {
+                    backgroundColor: colors.inputBackground,
+                    borderColor: colors.inputBorder,
+                    color: colors.textPrimary,
+                    minHeight: 80,
+                    textAlignVertical: 'top',
+                    paddingTop: 12,
+                  },
+                ]}
+                placeholder="Add any additional details..."
+                placeholderTextColor={colors.placeholder}
+                value={description}
+                onChangeText={setDescription}
+                multiline
+                numberOfLines={3}
+              />
             </View>
           </ScrollView>
 
@@ -974,6 +1195,8 @@ const EditActivityModal = ({ visible, activity, onClose, onSave, onDelete, color
   const [isRecurring, setIsRecurring] = useState(false);
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
+  const [location, setLocation] = useState('');
+  const [description, setDescription] = useState('');
   const [timeError, setTimeError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -988,6 +1211,8 @@ const EditActivityModal = ({ visible, activity, onClose, onSave, onDelete, color
       setIsRecurring(activity.isRecurring);
       setStartTime(activity.startTime);
       setEndTime(activity.endTime);
+      setLocation(activity.location || '');
+      setDescription(activity.description || '');
       setTimeError('');
       setIsSaving(false);
       setIsDeleting(false);
@@ -1023,12 +1248,8 @@ const EditActivityModal = ({ visible, activity, onClose, onSave, onDelete, color
       setTimeError('Invalid end time (use HH:MM format)');
       return false;
     }
-    const startMinutes = parseTime(startTime)!;
-    const endMinutes = parseTime(endTime)!;
-    if (endMinutes <= startMinutes) {
-      setTimeError('End time must be after start time');
-      return false;
-    }
+    // Allow overnight activities (end < start means it spans to next day)
+    // No error needed - this is a valid overnight activity
     setTimeError('');
     return true;
   };
@@ -1052,6 +1273,8 @@ const EditActivityModal = ({ visible, activity, onClose, onSave, onDelete, color
       isRecurring,
       startTime,
       endTime,
+      location: location.trim() || undefined,
+      description: description.trim() || undefined,
     });
     
     if (error) {
@@ -1307,6 +1530,47 @@ const EditActivityModal = ({ visible, activity, onClose, onSave, onDelete, color
               ) : null}
             </View>
 
+            <View style={styles.formGroup}>
+              <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Location (Optional)</Text>
+              <TextInput
+                style={[
+                  styles.formInput,
+                  {
+                    backgroundColor: colors.inputBackground,
+                    borderColor: colors.inputBorder,
+                    color: colors.textPrimary,
+                  },
+                ]}
+                placeholder="e.g., Gym, Office, Home"
+                placeholderTextColor={colors.placeholder}
+                value={location}
+                onChangeText={setLocation}
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Description (Optional)</Text>
+              <TextInput
+                style={[
+                  styles.formInput,
+                  {
+                    backgroundColor: colors.inputBackground,
+                    borderColor: colors.inputBorder,
+                    color: colors.textPrimary,
+                    minHeight: 80,
+                    textAlignVertical: 'top',
+                    paddingTop: 12,
+                  },
+                ]}
+                placeholder="Add any additional details..."
+                placeholderTextColor={colors.placeholder}
+                value={description}
+                onChangeText={setDescription}
+                multiline
+                numberOfLines={3}
+              />
+            </View>
+
             {/* Delete Button */}
             <Pressable
               style={[styles.deleteButton, { backgroundColor: (colors.error || '#EF4444') + '15' }]}
@@ -1358,15 +1622,17 @@ type AIPlannerModalProps = {
   onClose: () => void;
   onApprove: (activities: ActivityInput[]) => Promise<void>;
   recurringActivities: Activity[];
+  allActivities: Activity[];
   weekStart: Date;
   colors: any;
   userId: string;
 };
 
-const AIPlannerModal = ({ visible, onClose, onApprove, recurringActivities, weekStart, colors, userId }: AIPlannerModalProps) => {
+const AIPlannerModal = ({ visible, onClose, onApprove, recurringActivities, allActivities, weekStart, colors, userId }: AIPlannerModalProps) => {
   const [prompt, setPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedActivities, setGeneratedActivities] = useState<ActivityInput[]>([]);
+  const [activityActions, setActivityActions] = useState<ActivityAction[]>([]); // Store full actions for approval
   const [validationResult, setValidationResult] = useState<{ valid: boolean; conflicts: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isGenerateHovered, setIsGenerateHovered] = useState(false);
@@ -1381,15 +1647,32 @@ const AIPlannerModal = ({ visible, onClose, onApprove, recurringActivities, week
     setIsGenerating(true);
     setError(null);
     setGeneratedActivities([]);
+    setActivityActions([]);
     setValidationResult(null);
 
     try {
-      const activities = await generateSchedule(prompt, recurringActivities, weekStart, userId);
+      const actions = await generateSchedule(prompt, recurringActivities, weekStart, userId, allActivities);
       
-      setGeneratedActivities(activities);
+      // Store full actions for approval
+      setActivityActions(actions);
       
-      // Validate against recurring activities
-      const validation = validateSchedule(activities, recurringActivities);
+      // Convert ActivityAction to ActivityInput for display (filter out deletes, convert updates/creates)
+      const displayActivities: ActivityInput[] = actions
+        .filter(a => a.action !== 'delete')
+        .map(a => ({
+          name: a.name!,
+          day: a.day!,
+          startTime: a.startTime!,
+          endTime: a.endTime!,
+          color: a.color || '#3B82F6',
+          isRecurring: Boolean(a.isRecurring),
+          userId: a.userId || userId,
+        }));
+      
+      setGeneratedActivities(displayActivities);
+      
+      // Validate against recurring activities (only check new/updated activities)
+      const validation = validateSchedule(displayActivities, recurringActivities);
       setValidationResult(validation);
     } catch (err) {
       console.error('Failed to generate schedule:', err);
@@ -1400,20 +1683,22 @@ const AIPlannerModal = ({ visible, onClose, onApprove, recurringActivities, week
   };
 
   const handleApprove = async () => {
-    if (generatedActivities.length === 0) return;
+    if (activityActions.length === 0) return;
     
     try {
-      await onApprove(generatedActivities);
+      // Pass the full actions array so approval handler can process updates/deletes
+      await onApprove(activityActions as any);
       handleClose();
     } catch (err) {
       console.error('Failed to approve schedule:', err);
-      setError('Failed to create activities. Please try again.');
+      setError('Failed to apply schedule changes. Please try again.');
     }
   };
 
   const handleClose = () => {
     setPrompt('');
     setGeneratedActivities([]);
+    setActivityActions([]);
     setValidationResult(null);
     setError(null);
     onClose();
@@ -1715,33 +2000,100 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
     setShowAIPlanner(true);
   };
 
-  // Handle approve AI-generated activities
-  const handleApproveAISchedule = async (generatedActivities: ActivityInput[]) => {
+  // Handle approve AI-generated activities (now supports create, update, delete)
+  const handleApproveAISchedule = async (actions: ActivityAction[] | ActivityInput[]) => {
     if (!user?.uid) return;
 
     try {
-      // Create all generated activities
-      for (const activity of generatedActivities) {
-        // Check for conflicts before creating
-        const conflict = checkTimeConflict(activity.day, activity.startTime, activity.endTime);
-        if (conflict) {
-          console.warn(`Skipping activity due to conflict: ${conflict}`);
-          continue;
+      // Check if it's the new format (ActivityAction[]) or old format (ActivityInput[])
+      const isActionFormat = Array.isArray(actions) && actions.length > 0 && 'action' in actions[0];
+      
+      if (!isActionFormat) {
+        // Legacy format - just create activities
+        const activities = actions as ActivityInput[];
+        for (const activity of activities) {
+          const conflict = checkTimeConflict(activity.day, activity.startTime, activity.endTime);
+          if (conflict) {
+            console.warn(`Skipping activity due to conflict: ${conflict}`);
+            continue;
+          }
+
+          const activityDate = activity.isRecurring 
+            ? undefined 
+            : formatDateToISO(dayToDate(activity.day, weekOffset));
+
+          await createActivity({
+            ...activity,
+            userId: user.uid,
+            activityDate,
+          });
         }
+        return;
+      }
 
-        const activityDate = activity.isRecurring 
-          ? undefined 
-          : formatDateToISO(dayToDate(activity.day, weekOffset));
+      // New format - handle create, update, delete
+      const activityActions = actions as ActivityAction[];
+      
+      for (const action of activityActions) {
+        if (action.action === 'delete') {
+          // Delete activity
+          if (action.id) {
+            await removeActivity(action.id);
+          }
+        } else if (action.action === 'update') {
+          // Update existing activity
+          if (action.id && action.name && action.day && action.startTime && action.endTime) {
+            // Check for conflicts before updating
+            const conflict = checkTimeConflict(action.day, action.startTime, action.endTime, weekOffset);
+            if (conflict) {
+              console.warn(`Skipping update due to conflict: ${conflict}`);
+              continue;
+            }
 
-        await createActivity({
-          ...activity,
-          userId: user.uid,
-          activityDate,
-        });
+            const activityDate = action.isRecurring 
+              ? undefined 
+              : formatDateToISO(dayToDate(action.day, weekOffset));
+
+            await updateActivity(action.id, {
+              name: action.name,
+              day: action.day,
+              startTime: action.startTime,
+              endTime: action.endTime,
+              color: action.color,
+              isRecurring: Boolean(action.isRecurring),
+              activityDate,
+            });
+          }
+        } else if (action.action === 'create') {
+          // Create new activity
+          if (action.name && action.day && action.startTime && action.endTime) {
+            // Check for conflicts before creating
+            const conflict = checkTimeConflict(action.day, action.startTime, action.endTime, weekOffset);
+            if (conflict) {
+              console.warn(`Skipping activity due to conflict: ${conflict}`);
+              continue;
+            }
+
+            const activityDate = action.isRecurring 
+              ? undefined 
+              : formatDateToISO(dayToDate(action.day, weekOffset));
+
+            await createActivity({
+              name: action.name,
+              day: action.day,
+              startTime: action.startTime,
+              endTime: action.endTime,
+              color: action.color || '#3B82F6',
+              isRecurring: Boolean(action.isRecurring),
+              userId: user.uid,
+              activityDate,
+            });
+          }
+        }
       }
       // Activities will update automatically via subscription
     } catch (error) {
-      console.error('Failed to create AI-generated activities:', error);
+      console.error('Failed to apply AI-generated schedule changes:', error);
       throw error;
     }
   };
@@ -1794,11 +2146,82 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
       const existingEnd = parseTime(existing.endTime);
       if (existingStart === null || existingEnd === null) continue;
 
-      // Check for overlap: new activity starts before existing ends AND new activity ends after existing starts
-      if (newStart < existingEnd && newEnd > existingStart) {
-        return `Conflicts with "${existing.name}" (${existing.startTime} - ${existing.endTime})`;
+      const existingIsOvernight = existingEnd < existingStart;
+      const newIsOvernight = newEnd < newStart;
+
+      // Handle overnight activities
+      if (existingIsOvernight) {
+        // Existing activity is overnight (e.g., 20:00 to 03:00)
+        // It spans from existingStart to 24:00 and 00:00 to existingEnd
+        if (newIsOvernight) {
+          // Both are overnight - check if they overlap
+          // They overlap if newStart < 24:00 OR newEnd > 00:00 (always true for overnight)
+          // More precisely: they overlap if the start times are close or end times are close
+          const existingEndAdjusted = existingEnd + 24 * 60; // Normalize to next day
+          const newEndAdjusted = newEnd + 24 * 60;
+          if (newStart < existingEndAdjusted && newEndAdjusted > existingStart) {
+            return `Conflicts with "${existing.name}" (${existing.startTime} - ${existing.endTime})`;
+          }
+        } else {
+          // New is not overnight, existing is overnight
+          // Check if new activity overlaps with existing's first part (existingStart to 24:00)
+          if (newStart < 24 * 60 && newEnd > existingStart) {
+            return `Conflicts with "${existing.name}" (${existing.startTime} - ${existing.endTime})`;
+          }
+        }
+      } else if (newIsOvernight) {
+        // New activity is overnight, existing is not
+        // Check if new activity's first part (newStart to 24:00) overlaps with existing
+        if (newStart < existingEnd && 24 * 60 > existingStart) {
+          return `Conflicts with "${existing.name}" (${existing.startTime} - ${existing.endTime})`;
+        }
+      } else {
+        // Both are normal (not overnight)
+        // Check for overlap: new activity starts before existing ends AND new activity ends after existing starts
+        if (newStart < existingEnd && newEnd > existingStart) {
+          return `Conflicts with "${existing.name}" (${existing.startTime} - ${existing.endTime})`;
+        }
       }
     }
+    
+    // Also check for conflicts with overnight activities from previous day that continue to this day
+    const dayIndex = dayOrder.indexOf(day);
+    const newIsOvernight = newEnd < newStart;
+    
+    if (dayIndex > 0) {
+      const prevDay = dayOrder[dayIndex - 1];
+      const prevDayDate = formatDateToISO(dayToDate(prevDay, checkWeekOffset));
+      const prevDayActivities = activities.filter((a) => {
+        if (a.day !== prevDay) return false;
+        if (a.isRecurring) return true;
+        if (a.activityDate) return a.activityDate === prevDayDate;
+        return false;
+      });
+      
+      for (const existing of prevDayActivities) {
+        const existingStart = parseTime(existing.startTime);
+        const existingEnd = parseTime(existing.endTime);
+        if (existingStart === null || existingEnd === null) continue;
+        
+        // Only check if existing is overnight and continues to this day
+        if (existingEnd < existingStart) {
+          // Existing activity continues from previous day (00:00 to existingEnd)
+          // Check if new activity overlaps with this continuation
+          if (newIsOvernight) {
+            // Both are overnight - new activity's continuation (00:00 to newEnd) might conflict
+            if (newEnd > 0 && newEnd < existingEnd) {
+              return `Conflicts with "${existing.name}" (${existing.startTime} - ${existing.endTime})`;
+            }
+          } else {
+            // New activity overlaps if it starts before existingEnd
+            if (newStart < existingEnd) {
+              return `Conflicts with "${existing.name}" (${existing.startTime} - ${existing.endTime})`;
+            }
+          }
+        }
+      }
+    }
+    
     return null;
   };
 
@@ -1813,6 +2236,9 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
     endTime: string;
     activityDate?: string;
     weekOffset?: number; // Week offset for non-recurring activities
+    recurrenceEndDate?: string; // YYYY-MM-DD for when recurring activity should end
+    location?: string;
+    description?: string;
   }): Promise<string | null> => {
     if (!user?.uid) return 'Not logged in';
 
@@ -1850,6 +2276,9 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           isRecurring: activity.isRecurring,
           startTime: activity.startTime,
           endTime: activity.endTime,
+          recurrenceEndDate: activity.isRecurring ? activity.recurrenceEndDate : undefined,
+          location: activity.location,
+          description: activity.description,
         });
       }
       // Activities will update automatically via subscription
@@ -1908,15 +2337,35 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
     }
 
     try {
+      // Find the original activity to check if we're converting between recurring and one-time
+      const originalActivity = activities.find(a => a.id === activity.id);
+      const isConvertingToRecurring = originalActivity && originalActivity.isRecurring === false && activity.isRecurring === true;
+      const isConvertingToOneTime = originalActivity && originalActivity.isRecurring === true && activity.isRecurring === false;
+      
       // Update the existing activity
-      await updateActivity(activity.id, {
+      const updatePayload: ActivityUpdate = {
         name: activity.name,
         day: activity.day,
         color: activity.color,
         isRecurring: activity.isRecurring,
         startTime: activity.startTime,
         endTime: activity.endTime,
-      });
+        location: activity.location,
+        description: activity.description,
+      };
+      
+      // When converting to recurring, clear activityDate to satisfy constraint
+      if (isConvertingToRecurring) {
+        updatePayload.activityDate = undefined; // Will be set to null by updateActivity
+      }
+      
+      // When converting to one-time, set activityDate to the date for the current week
+      if (isConvertingToOneTime) {
+        const activityDate = formatDateToISO(dayToDate(activity.day, weekOffset));
+        updatePayload.activityDate = activityDate;
+      }
+      
+      await updateActivity(activity.id, updatePayload);
 
       // If multiple days selected, create activities for additional days
       if (activity.days && activity.days.length > 1) {
@@ -1948,6 +2397,9 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
               isRecurring: activity.isRecurring,
               startTime: activity.startTime,
               endTime: activity.endTime,
+              recurrenceEndDate: activity.isRecurring ? activity.recurrenceEndDate : undefined,
+              location: activity.location,
+              description: activity.description,
             });
           }
         }
@@ -2153,6 +2605,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           onClose={() => setShowAIPlanner(false)}
           onApprove={handleApproveAISchedule}
           recurringActivities={getRecurringActivities()}
+          allActivities={activities}
           weekStart={getWeekStartDate()}
           colors={colors}
           userId={user?.uid || ''}
@@ -2206,6 +2659,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           onClose={() => setShowAIPlanner(false)}
           onApprove={handleApproveAISchedule}
           recurringActivities={getRecurringActivities()}
+          allActivities={activities}
           weekStart={getWeekStartDate()}
           colors={colors}
           userId={user?.uid || ''}
@@ -2264,6 +2718,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           onClose={() => setShowAIPlanner(false)}
           onApprove={handleApproveAISchedule}
           recurringActivities={getRecurringActivities()}
+          allActivities={activities}
           weekStart={getWeekStartDate()}
           colors={colors}
           userId={user?.uid || ''}
@@ -2316,6 +2771,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           onClose={() => setShowAIPlanner(false)}
           onApprove={handleApproveAISchedule}
           recurringActivities={getRecurringActivities()}
+          allActivities={activities}
           weekStart={getWeekStartDate()}
           colors={colors}
           userId={user?.uid || ''}
@@ -2374,6 +2830,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
         onClose={() => setShowAIPlanner(false)}
         onApprove={handleApproveAISchedule}
         recurringActivities={getRecurringActivities()}
+        allActivities={activities}
         weekStart={getWeekStartDate()}
         colors={colors}
         userId={user?.uid || ''}
@@ -2636,14 +3093,19 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, onOp
                         const endMinutes = parseTime(a.endTime);
                         if (startMinutes === null || endMinutes === null) return null;
                         
+                        const isOvernight = endMinutes < startMinutes;
+                        
                         // Timeline represents full 24 hours (0:00 to 24:00)
                         const TIMELINE_START = 0; // 12 AM in minutes
                         const TIMELINE_END = 24 * 60; // 12 AM next day in minutes
                         const TIMELINE_DURATION = TIMELINE_END - TIMELINE_START;
                         
+                        // For overnight activities, show from startTime to end of day
+                        const displayEndMinutes = isOvernight ? TIMELINE_END : endMinutes;
+                        
                         // Calculate position as percentage
                         const leftPercent = Math.max(0, ((startMinutes - TIMELINE_START) / TIMELINE_DURATION) * 100);
-                        const widthPercent = Math.min(100 - leftPercent, ((endMinutes - startMinutes) / TIMELINE_DURATION) * 100);
+                        const widthPercent = Math.min(100 - leftPercent, ((displayEndMinutes - startMinutes) / TIMELINE_DURATION) * 100);
                         
                         return (
                           <View
@@ -2659,6 +3121,42 @@ const MobileWeekList = ({ currentDay, onDayPress, onSignOut, onAddActivity, onOp
                           />
                         );
                       })}
+                    {/* Show overnight activities that continue from previous day */}
+                    {index > 0 && (() => {
+                      const prevDay = dayOrder[index - 1];
+                      const prevDayActivities = getActivitiesForDay(activities, prevDay, weekOffset, cancelledDates);
+                      const TIMELINE_START_CONT = 0;
+                      const TIMELINE_END_CONT = 24 * 60;
+                      const TIMELINE_DURATION_CONT = TIMELINE_END_CONT - TIMELINE_START_CONT;
+                      
+                      return prevDayActivities.map((a) => {
+                        const startMinutes = parseTime(a.startTime);
+                        const endMinutes = parseTime(a.endTime);
+                        if (startMinutes === null || endMinutes === null) return null;
+                        
+                        // Only show if this is an overnight activity that continues to this day
+                        if (endMinutes >= startMinutes) return null;
+                        
+                        // Show the continuation from 00:00 to endTime
+                        const leftPercent = 0;
+                        const widthPercent = (endMinutes / TIMELINE_DURATION_CONT) * 100;
+                        
+                        return (
+                          <View
+                            key={`${a.id}-continuation`}
+                            style={[
+                              styles.timelineActivityPositioned,
+                              {
+                                backgroundColor: a.color,
+                                opacity: 0.7, // Slightly faded to indicate continuation
+                                left: `${leftPercent}%`,
+                                width: `${Math.max(widthPercent, 3)}%`,
+                              },
+                            ]}
+                          />
+                        );
+                      });
+                    })()}
                   </View>
 
                   {/* Chevron */}
@@ -3212,10 +3710,10 @@ const MonthlyCalendarView = ({
                 <Text style={[styles.todayButtonText, { color: colors.primary }]}>Today</Text>
               </Pressable>
             )}
+            <ViewToggleButton viewMode="monthly" onToggle={onToggleView} colors={colors} />
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <AddActivityButton onPress={onAddActivity} colors={colors} />
-            <ViewToggleButton viewMode="monthly" onToggle={onToggleView} colors={colors} />
           </View>
         </View>
       </View>
@@ -3307,19 +3805,6 @@ const MonthlyCalendarView = ({
           ))}
         </View>
       </ScrollView>
-      
-      {/* Back to Weekly View Button (Mobile Only) */}
-      {Platform.OS !== 'web' && (
-        <View style={[styles.monthlyBackButtonContainer, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
-          <Pressable
-            style={[styles.monthlyBackButton, { backgroundColor: colors.primary }]}
-            onPress={onToggleView}
-          >
-            <Ionicons name="grid-outline" size={20} color="#ffffff" />
-            <Text style={styles.monthlyBackButtonText}>Back to Weekly View</Text>
-          </Pressable>
-        </View>
-      )}
     </View>
   );
 };
@@ -3536,13 +4021,18 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, onOpenAIPlanner
                     const endMinutes = parseTime(a.endTime);
                     if (startMinutes === null || endMinutes === null) return null;
                     
+                    const isOvernight = endMinutes < startMinutes;
+                    
+                    // For overnight activities, show from startTime to end of day (24:00)
+                    const displayEndMinutes = isOvernight ? 24 * 60 : endMinutes;
+                    const displayDuration = displayEndMinutes - startMinutes;
+                    
                     // Calculate top position (relative to grid start, plus 8px padding)
                     const startHoursFromGridStart = (startMinutes / 60) - GRID_START_HOUR;
                     const top = startHoursFromGridStart * HOUR_HEIGHT + 8;
                     
                     // Calculate height based on duration
-                    const durationMinutes = endMinutes - startMinutes;
-                    const height = (durationMinutes / 60) * HOUR_HEIGHT;
+                    const height = (displayDuration / 60) * HOUR_HEIGHT;
                     
                     // Skip if activity is outside visible range
                     if (top < 0 || top > TIME_SLOTS.length * HOUR_HEIGHT) return null;
@@ -3565,9 +4055,55 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, onOpenAIPlanner
                         <Text style={styles.desktopActivityBlockName} numberOfLines={2}>
                           {a.name}
                         </Text>
+                        {isOvernight && (
+                          <Text style={[styles.desktopActivityBlockName, { fontSize: 10, opacity: 0.9 }]}>
+                            → Next day
+                          </Text>
+                        )}
                       </Pressable>
                     );
                   })}
+                  
+                  {/* Show overnight activities that continue from previous day */}
+                  {index > 0 && (() => {
+                    const prevDay = dayOrder[index - 1];
+                    const prevDayActivities = getActivitiesForDay(activities, prevDay, weekOffset, cancelledDates || new Map());
+                    
+                    return prevDayActivities.map((a) => {
+                      const startMinutes = parseTime(a.startTime);
+                      const endMinutes = parseTime(a.endTime);
+                      if (startMinutes === null || endMinutes === null) return null;
+                      
+                      // Only show if this is an overnight activity that continues to this day
+                      if (endMinutes >= startMinutes) return null;
+                      
+                      // Show the continuation from 00:00 to endTime
+                      const top = 8; // Start at top of day
+                      const height = (endMinutes / 60) * HOUR_HEIGHT;
+                      
+                      return (
+                        <Pressable
+                          key={`${a.id}-continuation`}
+                          style={[
+                            styles.desktopActivityBlock,
+                            {
+                              backgroundColor: a.color,
+                              opacity: 0.7, // Slightly faded to indicate continuation
+                              top,
+                              height: Math.max(height, 24),
+                              left: 2,
+                              right: 2,
+                            },
+                          ]}
+                          onPress={() => onActivityClick?.(a)}
+                        >
+                          <Text style={[styles.desktopActivityBlockName, { fontSize: 10 }]} numberOfLines={1}>
+                            {a.name} (cont.)
+                          </Text>
+                        </Pressable>
+                      );
+                    });
+                  })()}
                   {TIME_SLOTS.map((slot) => (
                     <View
                       key={slot.hour}
@@ -3590,18 +4126,63 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, onOpenAIPlanner
 
       {/* Bottom Stats */}
       {(() => {
-        // Calculate total hours for the week
-        const totalMinutes = activities.reduce((sum, a) => {
-          const start = parseTime(a.startTime);
-          const end = parseTime(a.endTime);
-          if (start !== null && end !== null) {
-            // Handle activities that span midnight (e.g., 23:00 to 00:00)
-            const duration = end >= start ? (end - start) : (end + 24 * 60 - start);
-            return sum + duration;
-          }
-          return sum;
-        }, 0);
-        const totalHours = Math.round(totalMinutes / 60 * 10) / 10; // Round to 1 decimal
+        // Calculate total hours for the current week
+        // Count activities that appear in this week, accounting for recurring activities appearing multiple times
+        let totalMinutes = 0;
+        const weekDates = dayOrder.map(day => formatDateToISO(dayToDate(day, weekOffset)));
+        const weekStartDate = weekDates[0];
+        const weekEndDate = weekDates[6];
+        
+        // Track which activities we've already counted (to avoid double-counting)
+        const countedActivityIds = new Set<string>();
+        
+        // For each day in the week, get activities and sum their durations
+        dayOrder.forEach(day => {
+          const targetDate = formatDateToISO(dayToDate(day, weekOffset));
+          const dayActivities = getActivitiesForDay(activities, day, weekOffset, cancelledDates);
+          
+          dayActivities.forEach(activity => {
+            // For one-time activities, create a unique key with the date to avoid counting the same activity multiple times
+            // For recurring activities, count once per day they appear
+            const activityKey = activity.activityDate 
+              ? `${activity.id}-${activity.activityDate}` 
+              : `${activity.id}-${targetDate}`;
+            
+            // Skip if we've already counted this activity instance
+            if (countedActivityIds.has(activityKey)) {
+              return;
+            }
+            
+            // Only count activities that are actually in this week
+            if (activity.activityDate) {
+              // One-time activity: must be in the current week
+              if (activity.activityDate < weekStartDate || activity.activityDate > weekEndDate) {
+                return;
+              }
+            } else if (!activity.isRecurring) {
+              // Legacy non-recurring activity without activityDate - skip it as it's ambiguous
+              // These should have been migrated to have activityDate
+              return;
+            }
+            
+            const start = parseTime(activity.startTime);
+            const end = parseTime(activity.endTime);
+            if (start !== null && end !== null) {
+              // Handle activities that span midnight (e.g., 23:00 to 00:00)
+              const duration = end >= start ? (end - start) : (end + 24 * 60 - start);
+              totalMinutes += duration;
+              countedActivityIds.add(activityKey);
+            }
+          });
+        });
+        
+        // Calculate hours with better precision
+        // Show hours and minutes separately for more accuracy
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        const totalHoursDisplay = minutes > 0 
+          ? `${hours}h ${minutes}m`
+          : `${hours}h`;
 
         // Count recurring activities
         const recurringCount = activities.filter((a) => a.isRecurring).length;
@@ -3618,7 +4199,7 @@ const DesktopWeekGrid = ({ currentDay, onSignOut, onAddActivity, onOpenAIPlanner
           <View style={[styles.statsBar, { backgroundColor: colors.card }]}>
             <View style={styles.statItem}>
               <Ionicons name="time-outline" size={18} color={colors.primary} />
-              <Text style={[styles.statValue, { color: colors.textPrimary }]}>{totalHours}h</Text>
+              <Text style={[styles.statValue, { color: colors.textPrimary }]}>{totalHoursDisplay}</Text>
               <Text style={[styles.statLabel, { color: colors.textSecondary }]}>This week</Text>
             </View>
             <View style={[styles.statDivider, { backgroundColor: colors.inputBorder }]} />
@@ -4310,6 +4891,56 @@ const styles = StyleSheet.create({
   toggleHint: {
     fontSize: 12,
     marginTop: 2,
+  },
+  recurrenceDurationRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  recurrenceDurationOption: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recurrenceDurationText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  weeksInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  weeksButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weeksInput: {
+    flex: 1,
+    height: 40,
+    borderRadius: 8,
+    borderWidth: 1,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  formInputText: {
+    flex: 1,
+    fontSize: 16,
+  },
+  clearDateButton: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+  },
+  clearDateText: {
+    fontSize: 12,
+    fontWeight: '500',
   },
   counterRow: {
     flexDirection: 'row',
