@@ -25,6 +25,9 @@ const mapRowToActivity = (row: any): Activity => ({
   startTime: row.start_time,
   endTime: row.end_time,
   isRecurring: row.is_recurring,
+  recurrenceEndDate: row.recurrence_end_date,
+  location: row.location,
+  description: row.description,
   createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
   updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : Date.now(),
 });
@@ -38,6 +41,9 @@ const mapInputToPayload = (input: ActivityInput): Record<string, any> => ({
   start_time: input.startTime,
   end_time: input.endTime,
   is_recurring: input.isRecurring,
+  recurrence_end_date: input.recurrenceEndDate,
+  location: input.location,
+  description: input.description,
 });
 
 export const subscribeToActivities = (
@@ -228,6 +234,10 @@ export const getActivitiesForDay = (
     
     // For recurring activities on this day
     if (activity.isRecurring && activity.day === day) {
+      // Check if this recurring activity has ended
+      if (activity.recurrenceEndDate) {
+        if (targetDate > activity.recurrenceEndDate) return false;
+      }
       // Check if this specific date is cancelled
       if (cancelledDates) {
         const cancelled = cancelledDates.get(activity.id);
@@ -274,10 +284,58 @@ export const updateActivity = async (id: ActivityId, updates: ActivityUpdate) =>
   if (updates.name !== undefined) payload.name = updates.name;
   if (updates.color !== undefined) payload.color = updates.color;
   if (updates.day !== undefined) payload.day = updates.day;
-  if (updates.activityDate !== undefined) payload.activity_date = updates.activityDate;
+  
+  // Handle activityDate based on isRecurring value
+  // Constraint: if is_recurring = true, activity_date must be NULL
+  //             if is_recurring = false, activity_date must be set (NOT NULL)
+  
+  // Check if activityDate is explicitly provided as a string (not undefined)
+  const hasActivityDate = 'activityDate' in updates && updates.activityDate !== undefined && updates.activityDate !== null;
+  
+  if (hasActivityDate) {
+    // Explicitly provided as a valid date string - use it
+    payload.activity_date = updates.activityDate;
+  } else if ('activityDate' in updates && updates.activityDate === null) {
+    // Explicitly set to null - use it (for converting to recurring)
+    payload.activity_date = null;
+  } else if (updates.isRecurring === true) {
+    // Converting to recurring - activity_date must be NULL
+    payload.activity_date = null;
+  } else if (updates.isRecurring === false) {
+    // Converting to one-time - activity_date must be set
+    // Fetch current activity to get its day and calculate the date
+    const { data: currentActivity } = await supabase
+      .from(COLLECTION)
+      .select('day')
+      .eq('id', id)
+      .single();
+    
+    if (currentActivity?.day) {
+      // Calculate date for current week (week 0) based on day
+      // This is a fallback - the caller should ideally provide the date with weekOffset
+      const today = new Date();
+      const currentDay = today.getDay();
+      const mondayOffset = currentDay === 0 ? -6 : 1 - currentDay;
+      const monday = new Date(today);
+      monday.setDate(today.getDate() + mondayOffset);
+      monday.setHours(0, 0, 0, 0);
+      
+      const dayOrder = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+      const dayIndex = dayOrder.indexOf(currentActivity.day);
+      if (dayIndex !== -1) {
+        const targetDate = new Date(monday);
+        targetDate.setDate(monday.getDate() + dayIndex);
+        payload.activity_date = targetDate.toISOString().split('T')[0];
+      }
+    }
+  }
+  
   if (updates.startTime !== undefined) payload.start_time = updates.startTime;
   if (updates.endTime !== undefined) payload.end_time = updates.endTime;
   if (updates.isRecurring !== undefined) payload.is_recurring = updates.isRecurring;
+  if (updates.recurrenceEndDate !== undefined) payload.recurrence_end_date = updates.recurrenceEndDate;
+  if (updates.location !== undefined) payload.location = updates.location;
+  if (updates.description !== undefined) payload.description = updates.description;
 
   const { error } = await supabase.from(COLLECTION).update(payload).eq('id', id);
   if (error) throw error;
