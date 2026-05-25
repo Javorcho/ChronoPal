@@ -4,7 +4,9 @@ import {
   AuthCredentials,
   AuthUser,
   OAuthProvider,
+  SignInOAuthOptions,
   signInWithEmail,
+  consumePendingOAuthError,
   signInWithOAuth,
   signOutUser,
   signUpWithEmail,
@@ -19,7 +21,7 @@ type AuthState = {
   initialize: () => void;
   signIn: (credentials: AuthCredentials) => Promise<void>;
   signUp: (credentials: AuthCredentials) => Promise<{ sessionCreated: boolean }>;
-  signInOAuth: (provider: OAuthProvider) => Promise<void>;
+  signInOAuth: (provider: OAuthProvider, options?: SignInOAuthOptions) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -35,11 +37,13 @@ export const useAuthStore = create<AuthState>()((set) => ({
         return;
       }
 
+      const oauthError = consumePendingOAuthError();
+
       unsubscribe = subscribeToAuthChanges((authUser) =>
         set({
           user: authUser,
           initializing: false,
-          error: undefined,
+          error: authUser ? undefined : oauthError,
         }),
       );
     },
@@ -65,10 +69,10 @@ export const useAuthStore = create<AuthState>()((set) => ({
         return { sessionCreated: false };
       }
     },
-    signInOAuth: async (provider) => {
+    signInOAuth: async (provider, options) => {
       try {
         set({ oauthLoading: provider, error: undefined });
-        await signInWithOAuth(provider);
+        await signInWithOAuth(provider, options);
         set({ oauthLoading: undefined });
       } catch (error) {
         set({ oauthLoading: undefined, error: (error as Error).message });

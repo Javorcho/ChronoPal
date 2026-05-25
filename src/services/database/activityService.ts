@@ -9,8 +9,7 @@ import {
   dayToDate,
   dateToDayOfWeek,
 } from '@/types/schedule';
-import { isSupabaseConfigured } from '@/config/env';
-import { getMockActivities } from '@/utils/mockActivities';
+import { assertSupabaseConfigured, isSupabaseConfigured } from '@/config/env';
 import { getSupabaseClient } from '@/lib/supabase';
 
 const COLLECTION = 'activities';
@@ -51,7 +50,7 @@ export const subscribeToActivities = (
   callback: (activities: Activity[]) => void,
 ) => {
   if (!isSupabaseConfigured) {
-    callback(getMockActivities(userId));
+    callback([]);
     return () => undefined;
   }
 
@@ -69,9 +68,7 @@ export const subscribeToActivities = (
     })
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        fetchActivities(userId).then(callback).catch(() => {
-          callback(getMockActivities(userId));
-        });
+        fetchActivities(userId).then(callback).catch(() => callback([]));
       }
     });
 
@@ -79,9 +76,7 @@ export const subscribeToActivities = (
 };
 
 export const fetchActivities = async (userId: string): Promise<Activity[]> => {
-  if (!isSupabaseConfigured) {
-    return getMockActivities(userId);
-  }
+  assertSupabaseConfigured();
 
   const supabase = getSupabaseClient();
   const { data, error } = await supabase
@@ -99,13 +94,7 @@ export const fetchActivitiesForDateRange = async (
   startDate: string,
   endDate: string,
 ): Promise<Activity[]> => {
-  if (!isSupabaseConfigured) {
-    const mock = getMockActivities(userId);
-    return mock.filter(a => {
-      if (a.activityDate) return a.activityDate >= startDate && a.activityDate <= endDate;
-      return a.isRecurring;
-    });
-  }
+  assertSupabaseConfigured();
 
   const supabase = getSupabaseClient();
   
@@ -256,14 +245,7 @@ export const getActivitiesForDay = (
 };
 
 export const createActivity = async (input: ActivityInput): Promise<Activity> => {
-  if (!isSupabaseConfigured) {
-    return {
-      id: `mock-${Date.now()}`,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      ...input,
-    };
-  }
+  assertSupabaseConfigured();
 
   const supabase = getSupabaseClient();
   const { data, error } = await supabase.from(COLLECTION).insert(mapInputToPayload(input)).select().single();
@@ -276,7 +258,7 @@ export const createActivityForDate = async (input: Omit<ActivityInput, 'activity
 };
 
 export const updateActivity = async (id: ActivityId, updates: ActivityUpdate) => {
-  if (!isSupabaseConfigured) return;
+  assertSupabaseConfigured();
 
   const supabase = getSupabaseClient();
   const payload: Record<string, any> = { updated_at: new Date().toISOString() };
@@ -342,7 +324,8 @@ export const updateActivity = async (id: ActivityId, updates: ActivityUpdate) =>
 };
 
 export const removeActivity = async (id: ActivityId) => {
-  if (!isSupabaseConfigured) return;
+  assertSupabaseConfigured();
+
   const supabase = getSupabaseClient();
   const { error } = await supabase.from(COLLECTION).delete().eq('id', id);
   if (error) throw error;

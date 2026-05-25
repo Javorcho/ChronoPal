@@ -30,7 +30,6 @@ const PROVIDERS: { id: CalendarProvider; name: string; icon: string; oauthId: OA
 
 export const CalendarImportModal = ({ visible, onClose, onImport }: Props) => {
   const { colors } = useTheme();
-  const user = useAuthStore((state) => state.user);
   const signInOAuth = useAuthStore((state) => state.signInOAuth);
   const oauthLoading = useAuthStore((state) => state.oauthLoading);
 
@@ -48,20 +47,14 @@ export const CalendarImportModal = ({ visible, onClose, onImport }: Props) => {
     clearError();
     setSelectedProvider(provider);
 
-    // Check if user is already authenticated with this provider
-    if (user?.provider === oauthId) {
-      // Already connected, fetch events
+    try {
+      if (oauthId !== 'google') {
+        await signInOAuth(oauthId, { requestCalendarAccess: true });
+      }
       await fetchEvents(provider);
       setStep('events');
-    } else {
-      // Need to sign in with OAuth first
-      try {
-        await signInOAuth(oauthId);
-        await fetchEvents(provider);
-        setStep('events');
-      } catch (err) {
-        // Error is handled by the store
-      }
+    } catch {
+      // Error is handled by the store
     }
   };
 

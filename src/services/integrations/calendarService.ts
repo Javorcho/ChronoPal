@@ -9,6 +9,59 @@ import {
   MicrosoftCalendar,
   MicrosoftCalendarEvent,
 } from '@/types/calendar';
+import {
+  dateToDayOfWeek,
+  DayOfWeek,
+  formatDateToISO,
+  formatLocalTime,
+} from '@/types/schedule';
+
+/** One timed slice of an event on a single calendar day (for import). */
+export type CalendarEventDaySegment = {
+  activityDate: string;
+  day: DayOfWeek;
+  startTime: string;
+  endTime: string;
+};
+
+/**
+ * Split a timed event into one segment per local calendar day.
+ * e.g. Sat 22:00 → Sun 02:00 becomes Sat 22:00–23:59 and Sun 00:00–02:00.
+ */
+export const splitCalendarEventIntoDaySegments = (
+  startIso: string,
+  endIso: string,
+): CalendarEventDaySegment[] => {
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+    return [];
+  }
+
+  const segments: CalendarEventDaySegment[] = [];
+  let cursor = new Date(start);
+
+  while (cursor < end) {
+    const dayStart = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate());
+    const nextMidnight = new Date(dayStart);
+    nextMidnight.setDate(nextMidnight.getDate() + 1);
+
+    const sliceEnd = end < nextMidnight ? end : nextMidnight;
+    const continuesPastMidnight = end > nextMidnight;
+
+    segments.push({
+      activityDate: formatDateToISO(dayStart),
+      day: dateToDayOfWeek(dayStart),
+      startTime: formatLocalTime(cursor),
+      endTime: continuesPastMidnight ? '23:59' : formatLocalTime(sliceEnd),
+    });
+
+    cursor = sliceEnd;
+  }
+
+  return segments;
+};
 
 const GOOGLE_CALENDAR_API = 'https://www.googleapis.com/calendar/v3';
 const MICROSOFT_GRAPH_API = 'https://graph.microsoft.com/v1.0';

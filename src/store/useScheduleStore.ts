@@ -15,8 +15,6 @@ import {
   DayOfWeek,
   dayOrder,
 } from '@/types/schedule';
-import { getMockActivities } from '@/utils/mockActivities';
-
 type ScheduleState = {
   userId?: string;
   activities: Activity[];
@@ -33,19 +31,22 @@ type ScheduleState = {
   reset: () => void;
 };
 
-const fallbackUserId = 'demo-user';
-
 let unsubscribe: (() => void) | undefined;
 
 export const useScheduleStore = create<ScheduleState>()((set, get) => ({
     userId: undefined,
-    activities: getMockActivities(fallbackUserId),
+    activities: [],
     selectedDay: DayOfWeek.Monday,
     loading: false,
     hydrated: false,
     error: undefined,
     initialize: async (userId) => {
-      const resolvedUserId = userId ?? fallbackUserId;
+      if (!userId) {
+        set({ loading: false, hydrated: true, activities: [], error: 'User not signed in' });
+        return;
+      }
+
+      const resolvedUserId = userId;
       set({ loading: true, userId: resolvedUserId });
 
       unsubscribe?.();
@@ -68,8 +69,8 @@ export const useScheduleStore = create<ScheduleState>()((set, get) => ({
       } catch (error) {
         console.warn('[useScheduleStore] Failed to fetch activities', error);
         set({
-          activities: getMockActivities(resolvedUserId),
-        loading: false,
+          activities: [],
+          loading: false,
           hydrated: true,
           error: (error as Error).message,
         });
@@ -80,7 +81,11 @@ export const useScheduleStore = create<ScheduleState>()((set, get) => ({
         selectedDay: day,
       }),
     addActivity: async (input) => {
-      const userId = input.userId ?? get().userId ?? fallbackUserId;
+      const userId = input.userId ?? get().userId;
+      if (!userId) {
+        set({ error: 'User not signed in' });
+        return undefined;
+      }
       const payload: ActivityInput = {
         name: input.name ?? 'Untitled',
         color: input.color ?? '#7f78d2',

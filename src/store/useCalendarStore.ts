@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 
-import { getSessionWithToken } from '@/services/auth/authService';
+import {
+  CalendarReauthRequired,
+  ensureGoogleCalendarToken,
+  getSessionWithToken,
+} from '@/services/auth/authService';
 import { fetchAllCalendarEvents, fetchCalendars } from '@/services/integrations/calendarService';
 import { Calendar, CalendarEvent, CalendarProvider } from '@/types/calendar';
 
@@ -28,13 +32,16 @@ export const useCalendarStore = create<CalendarState>()((set, get) => ({
     set({ loading: true, error: undefined });
 
     try {
-      const session = await getSessionWithToken();
-      
-      if (!session?.providerToken) {
+      const accessToken =
+        provider === 'google'
+          ? await ensureGoogleCalendarToken()
+          : (await getSessionWithToken())?.providerToken;
+
+      if (!accessToken) {
         throw new Error(`Not connected to ${provider}. Please sign in with ${provider} first.`);
       }
 
-      const calendars = await fetchCalendars(provider, session.providerToken);
+      const calendars = await fetchCalendars(provider, accessToken);
       
       set((state) => ({
         calendars: [...state.calendars.filter((c) => c.provider !== provider), ...calendars],
@@ -44,7 +51,11 @@ export const useCalendarStore = create<CalendarState>()((set, get) => ({
         loading: false,
       }));
     } catch (error) {
-      set({ error: (error as Error).message, loading: false });
+      const message =
+        error instanceof CalendarReauthRequired
+          ? 'Allow Google Calendar access in the prompt, then try again.'
+          : (error as Error).message;
+      set({ error: message, loading: false });
     }
   },
 
@@ -52,9 +63,12 @@ export const useCalendarStore = create<CalendarState>()((set, get) => ({
     set({ loading: true, error: undefined });
 
     try {
-      const session = await getSessionWithToken();
-      
-      if (!session?.providerToken) {
+      const accessToken =
+        provider === 'google'
+          ? await ensureGoogleCalendarToken()
+          : (await getSessionWithToken())?.providerToken;
+
+      if (!accessToken) {
         throw new Error(`Not connected to ${provider}. Please sign in with ${provider} first.`);
       }
 
@@ -62,14 +76,18 @@ export const useCalendarStore = create<CalendarState>()((set, get) => ({
       const start = startDate || getStartOfWeek();
       const end = endDate || getEndOfWeek();
 
-      const events = await fetchAllCalendarEvents(provider, session.providerToken, start, end);
+      const events = await fetchAllCalendarEvents(provider, accessToken, start, end);
       
       set((state) => ({
         events: [...state.events.filter((e) => e.provider !== provider), ...events],
         loading: false,
       }));
     } catch (error) {
-      set({ error: (error as Error).message, loading: false });
+      const message =
+        error instanceof CalendarReauthRequired
+          ? 'Allow Google Calendar access in the prompt, then try again.'
+          : (error as Error).message;
+      set({ error: message, loading: false });
     }
   },
 

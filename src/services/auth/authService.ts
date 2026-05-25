@@ -3,7 +3,7 @@ import * as WebBrowser from 'expo-web-browser';
 import { Platform, Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { isSupabaseConfigured } from '@/config/env';
+import { assertSupabaseConfigured, isSupabaseConfigured } from '@/config/env';
 import { getSupabaseClient } from '@/lib/supabase';
 
 // Required for web OAuth
@@ -78,56 +78,78 @@ const clearGoogleTokens = async () => {
   }
 };
 
+const decodeOAuthParam = (value: string | null): string | null => {
+  if (!value) return null;
+  try {
+    return decodeURIComponent(value.replace(/\+/g, ' '));
+  } catch {
+    return value;
+  }
+};
+
+const cleanOAuthUrl = () => {
+  const path = window.location.pathname || '/';
+  window.history.replaceState(null, '', path);
+};
+
+/** Parsed OAuth redirect error (survives module load for auth store). */
+let pendingOAuthError: string | undefined;
+
+export const consumePendingOAuthError = (): string | undefined => {
+  const err = pendingOAuthError;
+  pendingOAuthError = undefined;
+  return err;
+};
+
 // Handle OAuth callback on web - must run early before React renders
 const handleWebOAuthCallback = async () => {
   if (Platform.OS !== 'web' || typeof window === 'undefined' || !isSupabaseConfigured) {
     return;
   }
 
-  const hash = window.location.hash;
-  if (!hash || (!hash.includes('access_token') && !hash.includes('error'))) {
+  const search = window.location.search;
+  if (!search || (!search.includes('code=') && !search.includes('error='))) {
     return;
   }
 
-  // Parse hash params
-  const params = new URLSearchParams(hash.substring(1));
-  const accessToken = params.get('access_token');
-  const refreshToken = params.get('refresh_token');
-  const providerToken = params.get('provider_token');
-  const providerRefreshToken = params.get('provider_refresh_token');
-  const expiresIn = params.get('expires_in');
+  const params = new URLSearchParams(search.substring(1));
+  const oauthError = params.get('error');
+  const oauthErrorDescription = decodeOAuthParam(params.get('error_description'));
 
-  if (accessToken && refreshToken) {
+  if (oauthError) {
+    pendingOAuthError =
+      oauthErrorDescription ||
+      decodeOAuthParam(oauthError) ||
+      'Sign-in failed. Check Google OAuth settings in Supabase and Google Cloud Console.';
+    console.error('OAuth error:', pendingOAuthError);
+    cleanOAuthUrl();
+    return;
+  }
+
+  const authCode = params.get('code');
+  if (authCode) {
     const supabase = getSupabaseClient();
     try {
-      await supabase.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
-      });
-      
-      // Store Google provider tokens if present
-      if (providerToken) {
-        await storeGoogleTokens(
-          providerToken, 
-          providerRefreshToken || undefined,
-          expiresIn ? parseInt(expiresIn, 10) : 3600
-        );
+      const { error } = await supabase.auth.exchangeCodeForSession(authCode);
+      if (error) {
+        pendingOAuthError = error.message;
+        console.error('PKCE code exchange failed:', error);
       }
-      
-      // Clean up URL
-      window.history.replaceState(null, '', window.location.pathname);
     } catch (e) {
-      console.error('Failed to set session from OAuth callback:', e);
+      pendingOAuthError = (e as Error).message;
+      console.error('PKCE code exchange failed:', e);
     }
-  } else if (params.get('error')) {
-    console.error('OAuth error:', params.get('error_description') || params.get('error'));
-    // Clean up URL even on error
-    window.history.replaceState(null, '', window.location.pathname);
+    cleanOAuthUrl();
   }
 };
 
-// Run immediately on module load
-handleWebOAuthCallback();
+/** Resolves after web OAuth URL is processed (must finish before getSession). */
+export const waitForWebOAuthCallback = (): Promise<void> => webOAuthCallbackPromise;
+
+let webOAuthCallbackPromise: Promise<void> = Promise.resolve();
+if (Platform.OS === 'web') {
+  webOAuthCallbackPromise = handleWebOAuthCallback();
+}
 
 // Export function to handle OAuth callback from URL (for initial URL or deep links)
 export const handleOAuthCallbackFromUrl = async (url: string): Promise<AuthUser | undefined> => {
@@ -136,64 +158,53 @@ export const handleOAuthCallbackFromUrl = async (url: string): Promise<AuthUser 
   }
 
   console.log('Handling OAuth callback from URL:', url);
-  
-  if (!url.includes('auth/callback') || (!url.includes('access_token') && !url.includes('error'))) {
+
+  if (!url.includes('auth/callback') || (!url.includes('code=') && !url.includes('error'))) {
     console.log('URL does not contain OAuth callback parameters');
     return undefined;
   }
 
   const supabase = getSupabaseClient();
-  
-  // Parse the URL to get tokens - check both hash and query params
-  let params: URLSearchParams;
-  
-  if (url.includes('#')) {
-    params = new URLSearchParams(url.split('#')[1]);
-  } else if (url.includes('?')) {
-    params = new URLSearchParams(url.split('?')[1]);
-  } else {
+
+  const queryStart = url.indexOf('?');
+  if (queryStart === -1) {
     console.error('No auth params in callback URL');
     return undefined;
   }
+  const params = new URLSearchParams(url.substring(queryStart + 1));
 
-  const accessToken = params.get('access_token');
-  const refreshToken = params.get('refresh_token');
-  const providerToken = params.get('provider_token');
-  const providerRefreshToken = params.get('provider_refresh_token');
+  const errorMsg = params.get('error_description') || params.get('error');
+  if (errorMsg) {
+    throw new Error(errorMsg);
+  }
 
-  if (accessToken && refreshToken) {
-    try {
-      const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
-      });
-
-      if (sessionError) {
-        console.error('Failed to set session:', sessionError);
-        throw sessionError;
-      }
-
-      // Store Google provider token if available from params or session
-      const googleToken = providerToken || sessionData.session?.provider_token;
-      const googleRefreshToken = providerRefreshToken || sessionData.session?.provider_refresh_token;
-      
-      if (googleToken) {
-        await storeGoogleTokens(googleToken, googleRefreshToken || undefined, 3600);
-      }
-
-      return toAuthUser(sessionData.user, googleToken || accessToken);
-    } catch (error) {
-      console.error('Error handling OAuth callback:', error);
-      throw error;
-    }
-  } else {
-    // Check for error in params
-    const errorMsg = params.get('error_description') || params.get('error');
-    if (errorMsg) {
-      throw new Error(errorMsg);
-    }
-    console.error('No tokens in callback URL');
+  const authCode = params.get('code');
+  if (!authCode) {
+    console.error('No auth code in callback URL');
     return undefined;
+  }
+
+  try {
+    const { data: sessionData, error: exchangeError } =
+      await supabase.auth.exchangeCodeForSession(authCode);
+
+    if (exchangeError) {
+      throw exchangeError;
+    }
+
+    const googleToken = sessionData.session?.provider_token;
+    const googleRefreshToken = sessionData.session?.provider_refresh_token;
+    if (googleToken) {
+      await storeGoogleTokens(googleToken, googleRefreshToken || undefined, 3600);
+    }
+
+    return toAuthUser(
+      sessionData.user,
+      googleToken || sessionData.session?.access_token,
+    );
+  } catch (error) {
+    console.error('Error handling OAuth callback:', error);
+    throw error;
   }
 };
 
@@ -211,6 +222,11 @@ export type AuthUser = {
 
 export type OAuthProvider = 'google' | 'azure' | 'apple';
 
+export type SignInOAuthOptions = {
+  /** Request Google Calendar / Microsoft Graph calendar scopes (for import). */
+  requestCalendarAccess?: boolean;
+};
+
 const toAuthUser = (user: any, accessToken?: string): AuthUser | undefined =>
   user
     ? {
@@ -221,11 +237,11 @@ const toAuthUser = (user: any, accessToken?: string): AuthUser | undefined =>
       }
     : undefined;
 
-// Get the redirect URI for OAuth
+// Get the redirect URI for OAuth (must match Supabase → Auth → URL Configuration)
 const getRedirectUri = () => {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    // On web, use the current origin so Supabase can detect the hash tokens
-    return window.location.origin;
+    const { origin, pathname } = window.location;
+    return `${origin}${pathname || '/'}`;
   }
   
   // On native mobile (iOS/Android), use the appropriate redirect URI
@@ -246,61 +262,60 @@ export const subscribeToAuthChanges = (
   callback: (user?: AuthUser) => void,
 ): (() => void) => {
   if (!isSupabaseConfigured) {
-    callback({ uid: 'demo-user', email: 'demo@chronopal.dev' });
+    callback(undefined);
     return () => undefined;
   }
 
   const supabase = getSupabaseClient();
-  
-  // Check for existing session first (handles page refresh)
-  // The OAuth callback is handled at module load time by handleWebOAuthCallback
-  supabase.auth.getSession().then(({ data: { session } }) => {
+
+  const emitSession = (session: { user: { id: string; email?: string | null }; provider_token?: string | null; provider_refresh_token?: string | null } | null) => {
     const user = session?.user
       ? { uid: session.user.id, email: session.user.email ?? undefined }
       : undefined;
-    
-    // Store provider token if available
+
     if (session?.provider_token) {
       storeGoogleTokens(
-        session.provider_token, 
-        session.provider_refresh_token || undefined, 
-        3600
+        session.provider_token,
+        session.provider_refresh_token || undefined,
+        3600,
       );
     }
-    
-    callback(user);
-  });
 
-  // Subscribe to future auth changes
-  const { data } = supabase.auth.onAuthStateChange((event, session) => {
-    const user = session?.user
-      ? { uid: session.user.id, email: session.user.email ?? undefined }
-      : undefined;
-    
-    // Store provider token when signing in
-    if (event === 'SIGNED_IN' && session?.provider_token) {
-      storeGoogleTokens(
-        session.provider_token, 
-        session.provider_refresh_token || undefined, 
-        3600
-      );
+    callback(user);
+  };
+
+  const loadInitialSession = async () => {
+    if (Platform.OS === 'web') {
+      await waitForWebOAuthCallback();
     }
-    
-    // Clear tokens on sign out
+    const { data: { session } } = await supabase.auth.getSession();
+    emitSession(session);
+  };
+
+  loadInitialSession();
+
+  // Subscribe to auth changes after initial load (skip INITIAL_SESSION to avoid a null flash)
+  const { data } = supabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'INITIAL_SESSION') {
+      return;
+    }
+
     if (event === 'SIGNED_OUT') {
       clearGoogleTokens();
+      callback(undefined);
+      return;
     }
-    
-    callback(user);
+
+    if (session) {
+      emitSession(session);
+    }
   });
 
   return data.subscription.unsubscribe;
 };
 
 export const signUpWithEmail = async ({ email, password }: AuthCredentials): Promise<{ user?: AuthUser; sessionCreated: boolean }> => {
-  if (!isSupabaseConfigured) {
-    return { user: { uid: 'demo-user', email }, sessionCreated: true };
-  }
+  assertSupabaseConfigured();
 
   const supabase = getSupabaseClient();
   const { data, error } = await supabase.auth.signUp({
@@ -321,9 +336,7 @@ export const signUpWithEmail = async ({ email, password }: AuthCredentials): Pro
 };
 
 export const signInWithEmail = async ({ email, password }: AuthCredentials) => {
-  if (!isSupabaseConfigured) {
-    return { uid: 'demo-user', email };
-  }
+  assertSupabaseConfigured();
 
   const supabase = getSupabaseClient();
   const { data, error } = await supabase.auth.signInWithPassword({
@@ -367,10 +380,11 @@ export const signOutUser = async () => {
 };
 
 // OAuth Sign-In with Google, Microsoft (Azure), or Apple
-export const signInWithOAuth = async (provider: OAuthProvider) => {
-  if (!isSupabaseConfigured) {
-    return { uid: 'demo-user', email: `demo-${provider}@chronopal.dev`, provider };
-  }
+export const signInWithOAuth = async (
+  provider: OAuthProvider,
+  options?: SignInOAuthOptions,
+) => {
+  assertSupabaseConfigured();
 
   const supabase = getSupabaseClient();
   const redirectUri = getRedirectUri();
@@ -378,10 +392,14 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
   // Map provider names to Supabase provider names
   const supabaseProvider = provider === 'azure' ? 'azure' : provider;
 
-  // Define scopes for calendar access
+  const wantCalendar = options?.requestCalendarAccess === true;
   const scopes: Record<OAuthProvider, string> = {
-    google: 'email profile https://www.googleapis.com/auth/calendar.readonly',
-    azure: 'email profile openid offline_access https://graph.microsoft.com/Calendars.Read',
+    google: wantCalendar
+      ? 'email profile https://www.googleapis.com/auth/calendar.readonly'
+      : 'email profile',
+    azure: wantCalendar
+      ? 'email profile openid offline_access https://graph.microsoft.com/Calendars.Read'
+      : 'email profile openid offline_access',
     apple: 'email name',
   };
 
@@ -395,10 +413,13 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
         redirectTo: redirectUri,
         scopes: scopes[provider],
         skipBrowserRedirect: true, // Important: don't auto-redirect
-        queryParams: provider === 'google' ? {
-          access_type: 'offline',
-          prompt: 'consent',
-        } : undefined,
+        queryParams: provider === 'google' && wantCalendar
+          ? {
+              access_type: 'offline',
+              prompt: 'consent',
+              include_granted_scopes: 'true',
+            }
+          : undefined,
       },
     });
 
@@ -414,75 +435,67 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
     console.log('Expected redirect to:', redirectUri);
     console.log('⚠️ IMPORTANT: Make sure this redirect URI is added to Supabase Dashboard → Authentication → URL Configuration');
 
-    // Helper function to parse OAuth callback URL and create session
+    // Helper function to parse OAuth callback URL and create session (PKCE)
     const handleOAuthCallback = async (callbackUrl: string) => {
       console.log('Processing OAuth callback URL:', callbackUrl);
-      
-      // Parse the URL to get tokens - check both hash and query params
-      let params: URLSearchParams;
-      
-      if (callbackUrl.includes('#')) {
-        params = new URLSearchParams(callbackUrl.split('#')[1]);
-      } else if (callbackUrl.includes('?')) {
-        params = new URLSearchParams(callbackUrl.split('?')[1]);
-      } else {
+
+      const queryStart = callbackUrl.indexOf('?');
+      if (queryStart === -1) {
         throw new Error('No auth params in callback URL');
       }
+      const params = new URLSearchParams(callbackUrl.substring(queryStart + 1));
 
-      const accessToken = params.get('access_token');
-      const refreshToken = params.get('refresh_token');
-      const providerToken = params.get('provider_token');
-      const providerRefreshToken = params.get('provider_refresh_token');
-
-      if (accessToken && refreshToken) {
-        const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        });
-
-        if (sessionError) {
-          throw sessionError;
-        }
-
-        // Store Google provider token if available from params or session
-        const googleToken = providerToken || sessionData.session?.provider_token;
-        const googleRefreshToken = providerRefreshToken || sessionData.session?.provider_refresh_token;
-        
-        if (googleToken && provider === 'google') {
-          await storeGoogleTokens(googleToken, googleRefreshToken || undefined, 3600);
-        }
-
-        return toAuthUser(sessionData.user, googleToken || accessToken);
-      } else {
-        // Check for error in params
-        const errorMsg = params.get('error_description') || params.get('error');
-        if (errorMsg) {
-          throw new Error(errorMsg);
-        }
-        throw new Error('No tokens in callback URL');
+      const errorMsg = params.get('error_description') || params.get('error');
+      if (errorMsg) {
+        throw new Error(errorMsg);
       }
+
+      const authCode = params.get('code');
+      if (!authCode) {
+        throw new Error('No auth code in callback URL');
+      }
+
+      const { data: sessionData, error: exchangeError } =
+        await supabase.auth.exchangeCodeForSession(authCode);
+
+      if (exchangeError) {
+        throw exchangeError;
+      }
+
+      const googleToken = sessionData.session?.provider_token;
+      const googleRefreshToken = sessionData.session?.provider_refresh_token;
+      if (googleToken && provider === 'google') {
+        await storeGoogleTokens(googleToken, googleRefreshToken || undefined, 3600);
+      }
+
+      return toAuthUser(
+        sessionData.user,
+        googleToken || sessionData.session?.access_token,
+      );
     };
 
     // Set up deep link listener as fallback in case WebBrowser doesn't capture the callback
-    let deepLinkListener: ((event: { url: string }) => void) | null = null;
+    let deepLinkSubscription: { remove: () => void } | null = null;
     let deepLinkResolve: ((url: string) => void) | null = null;
-    let deepLinkTimeout: NodeJS.Timeout | null = null;
-    
+    let deepLinkTimeout: ReturnType<typeof setTimeout> | null = null;
+
     const deepLinkPromise = new Promise<string>((resolve, reject) => {
       deepLinkResolve = resolve;
-      
-      // Set up listener for deep link
-      deepLinkListener = (event: { url: string }) => {
+
+      const listener = (event: { url: string }) => {
         console.log('Deep link received via Linking API:', event.url);
-        if (event.url.includes('auth/callback') && (event.url.includes('access_token') || event.url.includes('error'))) {
+        if (
+          event.url.includes('auth/callback') &&
+          (event.url.includes('code=') || event.url.includes('error'))
+        ) {
           if (deepLinkResolve) {
             deepLinkResolve(event.url);
           }
         }
       };
-      
-      Linking.addEventListener('url', deepLinkListener);
-      
+
+      deepLinkSubscription = Linking.addEventListener('url', listener);
+
       // Timeout after 60 seconds
       deepLinkTimeout = setTimeout(() => {
         reject(new Error('OAuth callback timeout - no response received'));
@@ -512,9 +525,8 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
       ]);
 
       // Clean up listener and timeout
-      if (deepLinkListener) {
-        Linking.removeEventListener('url', deepLinkListener);
-      }
+      deepLinkSubscription?.remove();
+      deepLinkSubscription = null;
       if (deepLinkTimeout) {
         clearTimeout(deepLinkTimeout);
       }
@@ -548,9 +560,8 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
       return undefined;
     } catch (error) {
       // Clean up listener and timeout on error
-      if (deepLinkListener) {
-        Linking.removeEventListener('url', deepLinkListener);
-      }
+      deepLinkSubscription?.remove();
+      deepLinkSubscription = null;
       if (deepLinkTimeout) {
         clearTimeout(deepLinkTimeout);
       }
@@ -558,16 +569,19 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
     }
   }
 
-  // Web OAuth flow
+  // Web OAuth flow — redirect browser to Supabase / Google
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: supabaseProvider,
     options: {
       redirectTo: redirectUri,
       scopes: scopes[provider],
-      queryParams: provider === 'google' ? {
-        access_type: 'offline',
-        prompt: 'consent',
-      } : undefined,
+      queryParams: provider === 'google' && wantCalendar
+        ? {
+            access_type: 'offline',
+            prompt: 'consent',
+            include_granted_scopes: 'true',
+          }
+        : undefined,
     },
   });
 
@@ -575,7 +589,59 @@ export const signInWithOAuth = async (provider: OAuthProvider) => {
     throw error;
   }
 
+  if (data?.url && typeof window !== 'undefined') {
+    window.location.assign(data.url);
+  }
+
   return undefined;
+};
+
+const GOOGLE_CALENDAR_SCOPE_PROBE =
+  'https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1';
+
+/** Thrown on web when user is redirected to Google for calendar consent. */
+export class CalendarReauthRequired extends Error {
+  constructor(message = 'Redirecting to Google for calendar access…') {
+    super(message);
+    this.name = 'CalendarReauthRequired';
+  }
+}
+
+const hasGoogleCalendarScope = async (accessToken: string): Promise<boolean> => {
+  try {
+    const response = await fetch(GOOGLE_CALENDAR_SCOPE_PROBE, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Returns a Google access token with calendar.readonly scope.
+ * Re-runs Google OAuth with calendar scopes if the current token lacks them.
+ */
+export const ensureGoogleCalendarToken = async (): Promise<string> => {
+  const session = await getSessionWithToken();
+  if (session?.providerToken && (await hasGoogleCalendarScope(session.providerToken))) {
+    return session.providerToken;
+  }
+
+  await signInWithOAuth('google', { requestCalendarAccess: true });
+
+  if (Platform.OS === 'web') {
+    throw new CalendarReauthRequired();
+  }
+
+  const updated = await getSessionWithToken();
+  if (!updated?.providerToken || !(await hasGoogleCalendarScope(updated.providerToken))) {
+    throw new Error(
+      'Calendar access was not granted. Sign in with Google again and allow calendar permission.',
+    );
+  }
+
+  return updated.providerToken;
 };
 
 // Refresh Google access token using refresh token

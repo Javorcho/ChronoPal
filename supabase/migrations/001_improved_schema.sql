@@ -1,5 +1,6 @@
--- ChronoPal Database Schema Improvements
--- Run this migration in Supabase SQL Editor
+-- OPTIONAL extensions (categories, reminders, extra activity columns).
+-- Canonical schema for thesis §3.4: see 000_initial_schema.sql
+-- Run only after 000_initial_schema.sql if you need these features.
 
 -- ============================================
 -- 1. CATEGORIES TABLE

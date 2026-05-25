@@ -5,23 +5,10 @@ import {
   CategoryUpdate,
   defaultCategories,
 } from '@/types/schedule';
-import { isSupabaseConfigured } from '@/config/env';
+import { assertSupabaseConfigured, isSupabaseConfigured } from '@/config/env';
 import { getSupabaseClient } from '@/lib/supabase';
 
 const COLLECTION = 'categories';
-
-// Mock categories for demo mode
-const getMockCategories = (userId: string): Category[] => {
-  return defaultCategories.map((cat, index) => ({
-    id: `mock-cat-${index}`,
-    userId,
-    name: cat.name,
-    color: cat.color,
-    icon: cat.icon,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  }));
-};
 
 // Subscribe to real-time category changes
 export const subscribeToCategories = (
@@ -29,7 +16,7 @@ export const subscribeToCategories = (
   callback: (categories: Category[]) => void,
 ) => {
   if (!isSupabaseConfigured) {
-    callback(getMockCategories(userId));
+    callback([]);
     return () => undefined;
   }
 
@@ -52,9 +39,7 @@ export const subscribeToCategories = (
     )
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        fetchCategories(userId).then(callback).catch(() => {
-          callback(getMockCategories(userId));
-        });
+        fetchCategories(userId).then(callback).catch(() => callback([]));
       }
     });
 
@@ -65,9 +50,7 @@ export const subscribeToCategories = (
 
 // Fetch all categories for a user
 export const fetchCategories = async (userId: string): Promise<Category[]> => {
-  if (!isSupabaseConfigured) {
-    return getMockCategories(userId);
-  }
+  assertSupabaseConfigured();
 
   const supabase = getSupabaseClient();
   const { data, error } = await supabase
@@ -93,15 +76,7 @@ export const fetchCategories = async (userId: string): Promise<Category[]> => {
 
 // Create a new category
 export const createCategory = async (input: CategoryInput): Promise<Category> => {
-  if (!isSupabaseConfigured) {
-    const fallbackCategory: Category = {
-      id: `mock-${Date.now()}`,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      ...input,
-    };
-    return fallbackCategory;
-  }
+  assertSupabaseConfigured();
 
   const supabase = getSupabaseClient();
   const payload = {
@@ -132,9 +107,7 @@ export const updateCategory = async (
   id: CategoryId,
   updates: CategoryUpdate,
 ) => {
-  if (!isSupabaseConfigured) {
-    return;
-  }
+  assertSupabaseConfigured();
 
   const supabase = getSupabaseClient();
   const payload: Record<string, any> = {
@@ -150,9 +123,7 @@ export const updateCategory = async (
 
 // Delete a category
 export const removeCategory = async (id: CategoryId) => {
-  if (!isSupabaseConfigured) {
-    return;
-  }
+  assertSupabaseConfigured();
 
   const supabase = getSupabaseClient();
   const { error } = await supabase.from(COLLECTION).delete().eq('id', id);
@@ -163,9 +134,7 @@ export const removeCategory = async (id: CategoryId) => {
 
 // Initialize default categories for a new user
 export const initializeDefaultCategories = async (userId: string): Promise<Category[]> => {
-  if (!isSupabaseConfigured) {
-    return getMockCategories(userId);
-  }
+  assertSupabaseConfigured();
 
   // Check if user already has categories
   const existing = await fetchCategories(userId);

@@ -57,10 +57,13 @@ Instructions:
 10. If the user requests multiple different activities, create separate entries for each
 11. If the user requests activities for a specific day, create activities for that day only
 12. If the user wants to rearrange, move, or reschedule existing activities, include an "id" field with the activity ID and an "action" field set to "update"
-13. If the user wants to delete activities, include an "id" field with the activity ID and an "action" field set to "delete"
+13. If the user wants to delete, remove, cancel, drop, clear, or get rid of existing activities, return entries with ONLY two fields: "id" (the ID copied verbatim from the "All existing activities" list above) and "action": "delete". DO NOT include name, day, startTime, endTime, color, or isRecurring on delete entries.
+   - Match the activity by the name/day/time the user mentions. If they say "remove all gym sessions", emit one delete entry per matching activity in the list.
+   - If the user gives a delete instruction but no listed activity matches, return an empty array [].
 14. For new activities, do NOT include "id" or "action" fields (they will be created)
 15. When rearranging, you can change the day, startTime, or endTime of existing activities
 16. Only rearrange activities that are explicitly requested to be rearranged
+17. It is valid for the response to contain ONLY delete entries when the user only asked to delete things. Do not invent create/update entries to "balance" the response.
 Return ONLY a valid JSON array, no markdown, no code blocks, no explanation. Example format:
 [
   {

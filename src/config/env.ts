@@ -17,3 +17,11 @@ export const env = {
 export const isSupabaseConfigured = Boolean(env.supabaseUrl && env.supabaseAnonKey);
 export const isGeminiConfigured = Boolean(env.geminiApiKey);
 
+export const assertSupabaseConfigured = (): void => {
+  if (!isSupabaseConfigured) {
+    throw new Error(
+      'Supabase is not configured. Set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY in .env',
+    );
+  }
+};
+

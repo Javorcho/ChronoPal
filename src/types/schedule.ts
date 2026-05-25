@@ -256,9 +256,18 @@ export const dayToDate = (day: DayOfWeek, weekOffset: number = 0): Date => {
   return targetDate;
 };
 
-// Format date to YYYY-MM-DD
+// Format date to YYYY-MM-DD (local calendar date, not UTC)
 export const formatDateToISO = (date: Date): string => {
-  return date.toISOString().split('T')[0];
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export const formatLocalTime = (date: Date): string => {
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
 };
 
 // Parse YYYY-MM-DD to Date

@@ -19,8 +19,15 @@ import { useTheme } from '@/store/useThemeStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { Activity, ActivityUpdate, dayNames, DayOfWeek, dayOrder, formatDateToISO, dayToDate, dateToDayOfWeek } from '@/types/schedule';
 import { subscribeToActivities, createActivity, updateActivity, removeActivity, getActivitiesForDay, fetchExceptionsForDateRange, clearExceptionsCache } from '@/services/database/activityService';
-import { fetchGoogleCalendarEvents } from '@/services/integrations/calendarService';
-import { getSessionWithToken } from '@/services/auth/authService';
+import {
+  fetchGoogleCalendarEvents,
+  splitCalendarEventIntoDaySegments,
+} from '@/services/integrations/calendarService';
+import {
+  CalendarReauthRequired,
+  ensureGoogleCalendarToken,
+} from '@/services/auth/authService';
+import { DatePickerField } from '@/components/DatePickerField';
 import { createExceptionsForWeeks } from '@/services/database/exceptionService';
 import { generateSchedule, validateSchedule, ActivityAction } from '@/services/ai/plannerService';
 import { ActivityInput } from '@/types/schedule';
@@ -1008,35 +1015,17 @@ const AddActivityModal = ({ visible, onClose, onSave, colors, mode = 'weekly', m
                         <Text style={[styles.formLabel, { color: colors.textSecondary, marginBottom: 8 }]}>
                           End date
                         </Text>
-                        <Pressable
-                          style={[
-                            styles.formInput,
-                            {
-                              backgroundColor: colors.inputBackground,
-                              borderColor: colors.inputBorder,
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                            },
-                          ]}
-                          onPress={() => {
-                            // Simple date picker - you can enhance this with a proper date picker library
-                            const today = new Date();
-                            const minDate = new Date(today);
-                            minDate.setDate(today.getDate() + 1); // At least tomorrow
-                            
-                            // For now, we'll use a simple approach - user can manually enter
-                            // In a real app, you'd use a date picker component
-                            const defaultDate = new Date(today);
-                            defaultDate.setDate(today.getDate() + 30); // Default to 30 days from now
-                            setRecurrenceEndDate(defaultDate);
-                          }}
-                        >
-                          <Text style={[styles.formInputText, { color: recurrenceEndDate ? colors.textPrimary : colors.placeholder }]}>
-                            {recurrenceEndDate ? formatDateToISO(recurrenceEndDate) : 'Select end date'}
-                          </Text>
-                          <Ionicons name="calendar-outline" size={20} color={colors.textSecondary} />
-                        </Pressable>
+                        <DatePickerField
+                          value={recurrenceEndDate}
+                          onChange={setRecurrenceEndDate}
+                          placeholder="Select end date"
+                          minDate={(() => {
+                            const tomorrow = new Date();
+                            tomorrow.setDate(tomorrow.getDate() + 1);
+                            tomorrow.setHours(0, 0, 0, 0);
+                            return tomorrow;
+                          })()}
+                        />
                         {recurrenceEndDate && (
                           <Pressable
                             style={styles.clearDateButton}
@@ -1652,11 +1641,19 @@ const AIPlannerModal = ({ visible, onClose, onApprove, recurringActivities, allA
 
     try {
       const actions = await generateSchedule(prompt, recurringActivities, weekStart, userId, allActivities);
-      
+
+      if (actions.length === 0) {
+        setError("The AI couldn't find any activities matching your request. Try rephrasing or check the activity names.");
+        setActivityActions([]);
+        setGeneratedActivities([]);
+        setValidationResult(null);
+        return;
+      }
+
       // Store full actions for approval
       setActivityActions(actions);
-      
-      // Convert ActivityAction to ActivityInput for display (filter out deletes, convert updates/creates)
+
+      // Convert non-delete actions to ActivityInput for the create/update preview
       const displayActivities: ActivityInput[] = actions
         .filter(a => a.action !== 'delete')
         .map(a => ({
@@ -1668,10 +1665,10 @@ const AIPlannerModal = ({ visible, onClose, onApprove, recurringActivities, allA
           isRecurring: Boolean(a.isRecurring),
           userId: a.userId || userId,
         }));
-      
+
       setGeneratedActivities(displayActivities);
-      
-      // Validate against recurring activities (only check new/updated activities)
+
+      // Validate only the create/update actions; deletes are always safe.
       const validation = validateSchedule(displayActivities, recurringActivities);
       setValidationResult(validation);
     } catch (err) {
@@ -1681,6 +1678,16 @@ const AIPlannerModal = ({ visible, onClose, onApprove, recurringActivities, allA
       setIsGenerating(false);
     }
   };
+
+  // Look up the activities referenced by delete actions so we can show them
+  const deletedActivitiesPreview = activityActions
+    .filter(a => a.action === 'delete' && a.id)
+    .map(a => allActivities.find(act => act.id === a.id))
+    .filter((a): a is Activity => Boolean(a));
+
+  const hasPendingChanges = activityActions.length > 0;
+  const canApprove =
+    hasPendingChanges && (validationResult === null || validationResult.valid);
 
   const handleApprove = async () => {
     if (activityActions.length === 0) return;
@@ -1796,7 +1803,7 @@ const AIPlannerModal = ({ visible, onClose, onApprove, recurringActivities, allA
               </View>
             )}
 
-            {generatedActivities.length > 0 && (
+            {hasPendingChanges && (
               <View style={styles.formGroup}>
                 <Text style={[styles.formLabel, { color: colors.textSecondary, marginBottom: 12 }]}>
                   Generated Schedule Preview
@@ -1809,39 +1816,72 @@ const AIPlannerModal = ({ visible, onClose, onApprove, recurringActivities, allA
                     </Text>
                   </View>
                 )}
-                <View style={styles.previewActivities}>
-                  {dayOrder.map((day) => {
-                    const dayActivities = generatedActivities.filter(a => a.day === day);
-                    if (dayActivities.length === 0) return null;
-                    
-                    return (
-                      <View key={day} style={styles.previewDayGroup}>
-                        <View style={[styles.previewDayHeader, { backgroundColor: colors.inputBackground }]}>
-                          <Text style={[styles.previewDayName, { color: colors.textPrimary }]}>
-                            {dayNames[day]}
+
+                {deletedActivitiesPreview.length > 0 && (
+                  <View style={[styles.previewDayGroup, { marginBottom: 12 }]}>
+                    <View style={[styles.previewDayHeader, { backgroundColor: (colors.error || '#EF4444') + '20' }]}>
+                      <Text style={[styles.previewDayName, { color: colors.error || '#EF4444' }]}>
+                        To delete
+                      </Text>
+                      <Text style={[styles.previewDayCount, { color: colors.error || '#EF4444' }]}>
+                        {deletedActivitiesPreview.length} {deletedActivitiesPreview.length === 1 ? 'activity' : 'activities'}
+                      </Text>
+                    </View>
+                    {deletedActivitiesPreview.map((activity) => (
+                      <View
+                        key={activity.id}
+                        style={[styles.previewActivityItem, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}
+                      >
+                        <View style={[styles.previewActivityColorBar, { backgroundColor: colors.error || '#EF4444' }]} />
+                        <View style={styles.previewActivityInfo}>
+                          <Text style={[styles.previewActivityName, { color: colors.textPrimary, textDecorationLine: 'line-through' }]}>
+                            {activity.name}
                           </Text>
-                          <Text style={[styles.previewDayCount, { color: colors.textSecondary }]}>
-                            {dayActivities.length} {dayActivities.length === 1 ? 'activity' : 'activities'}
+                          <Text style={[styles.previewActivityMeta, { color: colors.textSecondary }]}>
+                            {dayNames[activity.day]} • {activity.startTime} - {activity.endTime}
+                            {activity.isRecurring && ' • Recurring'}
                           </Text>
                         </View>
-                        {dayActivities.map((activity, idx) => (
-                          <View key={idx} style={[styles.previewActivityItem, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
-                            <View style={[styles.previewActivityColorBar, { backgroundColor: activity.color }]} />
-                            <View style={styles.previewActivityInfo}>
-                              <Text style={[styles.previewActivityName, { color: colors.textPrimary }]}>
-                                {activity.name}
-                              </Text>
-                              <Text style={[styles.previewActivityMeta, { color: colors.textSecondary }]}>
-                                {activity.startTime} - {activity.endTime}
-                                {activity.isRecurring && ' • Recurring'}
-                              </Text>
-                            </View>
-                          </View>
-                        ))}
                       </View>
-                    );
-                  })}
-                </View>
+                    ))}
+                  </View>
+                )}
+
+                {generatedActivities.length > 0 && (
+                  <View style={styles.previewActivities}>
+                    {dayOrder.map((day) => {
+                      const dayActivities = generatedActivities.filter(a => a.day === day);
+                      if (dayActivities.length === 0) return null;
+
+                      return (
+                        <View key={day} style={styles.previewDayGroup}>
+                          <View style={[styles.previewDayHeader, { backgroundColor: colors.inputBackground }]}>
+                            <Text style={[styles.previewDayName, { color: colors.textPrimary }]}>
+                              {dayNames[day]}
+                            </Text>
+                            <Text style={[styles.previewDayCount, { color: colors.textSecondary }]}>
+                              {dayActivities.length} {dayActivities.length === 1 ? 'activity' : 'activities'}
+                            </Text>
+                          </View>
+                          {dayActivities.map((activity, idx) => (
+                            <View key={idx} style={[styles.previewActivityItem, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
+                              <View style={[styles.previewActivityColorBar, { backgroundColor: activity.color }]} />
+                              <View style={styles.previewActivityInfo}>
+                                <Text style={[styles.previewActivityName, { color: colors.textPrimary }]}>
+                                  {activity.name}
+                                </Text>
+                                <Text style={[styles.previewActivityMeta, { color: colors.textSecondary }]}>
+                                  {activity.startTime} - {activity.endTime}
+                                  {activity.isRecurring && ' • Recurring'}
+                                </Text>
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
               </View>
             )}
           </ScrollView>
@@ -1858,22 +1898,22 @@ const AIPlannerModal = ({ visible, onClose, onApprove, recurringActivities, allA
                 styles.modalButton,
                 styles.modalButtonSave,
                 {
-                  backgroundColor: generatedActivities.length > 0 && validationResult?.valid
+                  backgroundColor: canApprove
                     ? (isApproveHovered ? colors.primary + 'DD' : colors.primary)
                     : colors.inputBackground,
-                  opacity: generatedActivities.length > 0 && validationResult?.valid ? 1 : 0.7,
-                  borderWidth: isApproveHovered && generatedActivities.length > 0 && validationResult?.valid ? 1 : 0,
+                  opacity: canApprove ? 1 : 0.7,
+                  borderWidth: isApproveHovered && canApprove ? 1 : 0,
                   borderColor: colors.primary,
                 },
               ]}
               onPress={handleApprove}
               onHoverIn={() => setIsApproveHovered(true)}
               onHoverOut={() => setIsApproveHovered(false)}
-              disabled={generatedActivities.length === 0 || !validationResult?.valid}
+              disabled={!canApprove}
             >
               <Text style={[
                 styles.modalButtonText,
-                { color: generatedActivities.length > 0 && validationResult?.valid ? '#ffffff' : colors.placeholder }
+                { color: canApprove ? '#ffffff' : colors.placeholder }
               ]}>
                 Approve & Apply
               </Text>
@@ -2033,25 +2073,23 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
 
       // New format - handle create, update, delete
       const activityActions = actions as ActivityAction[];
-      
+
       for (const action of activityActions) {
         if (action.action === 'delete') {
-          // Delete activity
           if (action.id) {
             await removeActivity(action.id);
+            setActivities(prev => prev.filter(a => a.id !== action.id));
           }
         } else if (action.action === 'update') {
-          // Update existing activity
           if (action.id && action.name && action.day && action.startTime && action.endTime) {
-            // Check for conflicts before updating
             const conflict = checkTimeConflict(action.day, action.startTime, action.endTime, weekOffset);
             if (conflict) {
               console.warn(`Skipping update due to conflict: ${conflict}`);
               continue;
             }
 
-            const activityDate = action.isRecurring 
-              ? undefined 
+            const activityDate = action.isRecurring
+              ? undefined
               : formatDateToISO(dayToDate(action.day, weekOffset));
 
             await updateActivity(action.id, {
@@ -2063,22 +2101,37 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
               isRecurring: Boolean(action.isRecurring),
               activityDate,
             });
+
+            setActivities(prev =>
+              prev.map(a =>
+                a.id === action.id
+                  ? {
+                      ...a,
+                      name: action.name!,
+                      day: action.day!,
+                      startTime: action.startTime!,
+                      endTime: action.endTime!,
+                      color: action.color || a.color,
+                      isRecurring: Boolean(action.isRecurring),
+                      activityDate,
+                    }
+                  : a,
+              ),
+            );
           }
         } else if (action.action === 'create') {
-          // Create new activity
           if (action.name && action.day && action.startTime && action.endTime) {
-            // Check for conflicts before creating
             const conflict = checkTimeConflict(action.day, action.startTime, action.endTime, weekOffset);
             if (conflict) {
               console.warn(`Skipping activity due to conflict: ${conflict}`);
               continue;
             }
 
-            const activityDate = action.isRecurring 
-              ? undefined 
+            const activityDate = action.isRecurring
+              ? undefined
               : formatDateToISO(dayToDate(action.day, weekOffset));
 
-            await createActivity({
+            const created = await createActivity({
               name: action.name,
               day: action.day,
               startTime: action.startTime,
@@ -2088,10 +2141,11 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
               userId: user.uid,
               activityDate,
             });
+
+            setActivities(prev => [...prev, created]);
           }
         }
       }
-      // Activities will update automatically via subscription
     } catch (error) {
       console.error('Failed to apply AI-generated schedule changes:', error);
       throw error;
@@ -2259,15 +2313,14 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
     }
 
     try {
-      // Create an activity for each selected day
+      const created: Activity[] = [];
       for (const day of daysToCreate) {
-        // Use the weekOffset from activity if provided, otherwise use the current weekOffset
         const activityWeekOffset = activity.weekOffset !== undefined ? activity.weekOffset : weekOffset;
-        const activityDate = activity.activityDate || (activity.isRecurring 
-          ? undefined // Recurring activities don't have a specific date
+        const activityDate = activity.activityDate || (activity.isRecurring
+          ? undefined
           : formatDateToISO(dayToDate(day, activityWeekOffset)));
-        
-        await createActivity({
+
+        const newActivity = await createActivity({
           userId: user.uid,
           name: activity.name,
           day,
@@ -2280,8 +2333,11 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
           location: activity.location,
           description: activity.description,
         });
+        created.push(newActivity);
       }
-      // Activities will update automatically via subscription
+      if (created.length > 0) {
+        setActivities((prev) => [...prev, ...created]);
+      }
     } catch (error) {
       console.error('Failed to create activity:', error);
       return 'Failed to save activity';
@@ -2367,28 +2423,44 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
       
       await updateActivity(activity.id, updatePayload);
 
-      // If multiple days selected, create activities for additional days
+      setActivities((prev) =>
+        prev.map((a) =>
+          a.id === activity.id
+            ? {
+                ...a,
+                ...updatePayload,
+                activityDate:
+                  updatePayload.activityDate === undefined
+                    ? a.activityDate
+                    : updatePayload.activityDate ?? undefined,
+                updatedAt: Date.now(),
+              }
+            : a,
+        ),
+      );
+
+      const newlyCreated: Activity[] = [];
       if (activity.days && activity.days.length > 1) {
         const existingDay = activity.day;
-        const additionalDays = activity.days.filter(d => d !== existingDay);
-        
+        const additionalDays = activity.days.filter((d) => d !== existingDay);
+
         for (const day of additionalDays) {
-          // Check if activity already exists for this day with same name/time
-          const existing = activities.find(a => 
-            a.name === activity.name && 
-            a.day === day && 
-            a.startTime === activity.startTime && 
-            a.endTime === activity.endTime &&
-            a.isRecurring === activity.isRecurring &&
-            a.id !== activity.id // Exclude the current activity
+          const existing = activities.find(
+            (a) =>
+              a.name === activity.name &&
+              a.day === day &&
+              a.startTime === activity.startTime &&
+              a.endTime === activity.endTime &&
+              a.isRecurring === activity.isRecurring &&
+              a.id !== activity.id,
           );
-          
+
           if (!existing) {
-            const activityDate = activity.isRecurring 
-              ? undefined 
+            const activityDate = activity.isRecurring
+              ? undefined
               : formatDateToISO(dayToDate(day, weekOffset));
-            
-            await createActivity({
+
+            const created = await createActivity({
               userId: user.uid,
               name: activity.name,
               day,
@@ -2401,10 +2473,13 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
               location: activity.location,
               description: activity.description,
             });
+            newlyCreated.push(created);
           }
         }
       }
-      // Activities will update automatically via subscription
+      if (newlyCreated.length > 0) {
+        setActivities((prev) => [...prev, ...newlyCreated]);
+      }
     } catch (error) {
       console.error('Failed to update activity:', error);
       return 'Failed to update activity';
@@ -2438,14 +2513,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
     setImportSuccess(null);
 
     try {
-      // Get the session with provider token
-      const session = await getSessionWithToken();
-      
-      if (!session?.providerToken) {
-        setImportError('Please sign in with Google to import calendar events');
-        setIsImporting(false);
-        return;
-      }
+      const providerToken = await ensureGoogleCalendarToken();
 
       // Get the selected week's start and end dates based on weekOffset
       const weekStart = dayToDate(DayOfWeek.Monday, weekOffset);
@@ -2456,7 +2524,7 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
 
       // Fetch events from Google Calendar
       const googleEvents = await fetchGoogleCalendarEvents(
-        session.providerToken,
+        providerToken,
         'primary',
         weekStart,
         weekEnd
@@ -2468,58 +2536,66 @@ export const WeeklyGridScreen = ({ onSignOut }: WeeklyGridScreenProps) => {
         return;
       }
 
-      // Convert and import events
+      const weekStartIso = formatDateToISO(weekStart);
+      const weekEndIso = formatDateToISO(weekEnd);
+
       let importedCount = 0;
-      
+
       for (const event of googleEvents) {
-        // Skip all-day events for now (they don't have specific times)
         if (event.isAllDay) continue;
-        
-        // Parse the event times
-        const startDate = new Date(event.startTime);
-        const endDate = new Date(event.endTime);
-        
-        // Get the day of week
-        const eventDayIndex = startDate.getDay();
-        const dayIndex = eventDayIndex === 0 ? 6 : eventDayIndex - 1;
-        const day = dayOrder[dayIndex];
-        
-        // Format times as HH:MM
-        const startTime = `${startDate.getHours().toString().padStart(2, '0')}:${startDate.getMinutes().toString().padStart(2, '0')}`;
-        const endTime = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
-        
-        // Check if this event already exists (by name/time)
-        const exists = activities.some(
-          (a) => a.name === event.title && a.day === day && a.startTime === startTime && a.endTime === endTime
+
+        const segments = splitCalendarEventIntoDaySegments(
+          event.startTime,
+          event.endTime,
         );
-        
-        if (exists) continue;
 
-        // Get the activity date for this event
-        const activityDate = formatDateToISO(startDate);
+        for (const segment of segments) {
+          if (
+            segment.activityDate < weekStartIso ||
+            segment.activityDate > weekEndIso
+          ) {
+            continue;
+          }
 
-        // Create the activity
-        try {
-          await createActivity({
-            userId: user.uid,
-            name: event.title,
-            day,
-            activityDate,
-            color: '#4285F4', // Google blue for imported events
-            isRecurring: false,
-            startTime,
-            endTime,
-          });
-          importedCount++;
-        } catch (err) {
-          console.error('Failed to import event:', event.title, err);
+          const exists = activities.some(
+            (a) =>
+              a.name === event.title &&
+              a.activityDate === segment.activityDate &&
+              a.startTime === segment.startTime &&
+              a.endTime === segment.endTime,
+          );
+
+          if (exists) continue;
+
+          try {
+            const created = await createActivity({
+              userId: user.uid,
+              name: event.title,
+              day: segment.day,
+              activityDate: segment.activityDate,
+              color: '#4285F4',
+              isRecurring: false,
+              startTime: segment.startTime,
+              endTime: segment.endTime,
+            });
+            setActivities((prev) => [...prev, created]);
+            importedCount++;
+          } catch (err) {
+            console.error('Failed to import event:', event.title, err);
+          }
         }
       }
 
       setImportSuccess(importedCount);
     } catch (error) {
       console.error('Failed to import Google Calendar:', error);
-      setImportError(error instanceof Error ? error.message : 'Failed to import calendar');
+      if (error instanceof CalendarReauthRequired) {
+        setImportError(
+          'Allow Google Calendar access in the prompt, then click Import again.',
+        );
+      } else {
+        setImportError(error instanceof Error ? error.message : 'Failed to import calendar');
+      }
     }
 
     setIsImporting(false);

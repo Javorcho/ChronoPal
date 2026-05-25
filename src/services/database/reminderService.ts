@@ -4,7 +4,7 @@ import {
   ReminderInput,
   ReminderType,
 } from '@/types/schedule';
-import { isSupabaseConfigured } from '@/config/env';
+import { assertSupabaseConfigured, isSupabaseConfigured } from '@/config/env';
 import { getSupabaseClient } from '@/lib/supabase';
 
 const COLLECTION = 'reminders';
@@ -100,15 +100,7 @@ export const fetchUpcomingReminders = async (userId: string, minutes: number = 6
 };
 
 export const createReminder = async (input: ReminderInput): Promise<Reminder> => {
-  if (!isSupabaseConfigured) {
-    return {
-      id: `mock-${Date.now()}`,
-      ...input,
-      type: input.type || ReminderType.Notification,
-      sent: false,
-      createdAt: Date.now(),
-    };
-  }
+  assertSupabaseConfigured();
 
   const supabase = getSupabaseClient();
   const payload = {

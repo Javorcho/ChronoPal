@@ -20,9 +20,11 @@ export const getSupabaseClient = (): SupabaseClient => {
   // Create new instance
   supabaseInstance = createClient(env.supabaseUrl, env.supabaseAnonKey, {
     auth: {
+      flowType: 'pkce',
       persistSession: true,
       storageKey: 'chronopal-auth',
-      detectSessionInUrl: true, // Parse OAuth callback URL automatically
+      // OAuth callback handled in authService (avoids racing URL cleanup)
+      detectSessionInUrl: false,
       autoRefreshToken: true,
     },
   });
