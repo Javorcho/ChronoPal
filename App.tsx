@@ -7,6 +7,11 @@ import { WeeklyGridScreen } from '@/screens/WeeklyGridScreen';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useTheme } from '@/store/useThemeStore';
 import { handleOAuthCallbackFromUrl } from '@/services/auth/authService';
+import {
+  cancelAllActivityNotifications,
+  requestNotificationPermissions,
+  setupNotifications,
+} from '@/services/notifications/notificationService';
 
 export default function App() {
   const user = useAuthStore((state) => state.user);
@@ -15,6 +20,21 @@ export default function App() {
   const signOut = useAuthStore((state) => state.signOut);
 
   const { colors, isDark } = useTheme();
+
+  const handleSignOut = async () => {
+    await cancelAllActivityNotifications();
+    await signOut();
+  };
+
+  useEffect(() => {
+    setupNotifications();
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      requestNotificationPermissions();
+    }
+  }, [user]);
 
   useEffect(() => {
     initAuth();
@@ -71,7 +91,7 @@ export default function App() {
 
   return (
     <>
-      <WeeklyGridScreen onSignOut={signOut} />
+      <WeeklyGridScreen onSignOut={handleSignOut} />
       <StatusBar style={isDark ? 'light' : 'dark'} />
     </>
   );
